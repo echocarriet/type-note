@@ -1,7 +1,7 @@
 <script>
 const TOOLS = [
   { id: 'font', icon: 'Aa', label: '字體', enabled: true },
-  { id: 'symbols', icon: '✦', label: '符號', enabled: false },
+  { id: 'symbols', icon: '✦', label: '符號', enabled: true },
   { id: 'layout', icon: '↔', label: '排版', enabled: true },
   { id: 'box', icon: '▢', label: '文字框', enabled: false },
 ]

@@ -10,7 +10,7 @@ Phase 1 技術驗證已完成：
 - Clipboard API 複製 `image/png`
 - PNG 可貼到 Instagram Story
 
-目前進入 Phase 2，已建立正式編輯器骨架與以下功能：
+Phase 2 文字基礎功能與 Phase 3 特殊符號功能已完成，目前包含：
 
 - 即時文字預覽與無框文字輸入
 - 預覽下方的重設與複製 PNG
@@ -21,6 +21,9 @@ Phase 1 技術驗證已完成：
 - 「我的字體」觸控拖拉排序與順序保存
 - 常用色、Color Picker 與 HEX 色碼
 - 字體與排版工具面板
+- 符號與顏文字分頁及分類
+- 在目前文字游標位置插入符號或顏文字
+- 最近使用與收藏（保存在目前瀏覽器）
 
 ## Local development
 

@@ -5,12 +5,22 @@ import EditorActions from './components/EditorActions.vue'
 import NoteInput from './components/NoteInput.vue'
 import StickerPreview from './components/StickerPreview.vue'
 import { BUILTIN_FONTS, COMMON_COLORS } from './data/builtinFonts'
+import {
+  DECORATIONS,
+  KAOMOJI,
+  KAOMOJI_CATEGORIES,
+  SYMBOLS,
+  SYMBOL_CATEGORIES,
+  decorationKey,
+} from './data/decorations'
 import { deleteFont, getFonts, saveFont } from './services/fontDb'
 import { useEditorStore } from './stores/editor'
 import { hashFile } from './utils/fileHash'
 import { renderStickerPng } from './utils/renderSticker'
 
 const RECENT_FONTS_KEY = 'type-note-recent-fonts'
+const RECENT_DECORATIONS_KEY = 'type-note-recent-decorations'
+const FAVORITE_DECORATIONS_KEY = 'type-note-favorite-decorations'
 const registeredFontFaces = new Map()
 
 function fontFamilyFor(id) {
@@ -52,6 +62,13 @@ export default {
       fonts: [],
       selectedFontKey: 'builtin:system-sans',
       recentFontKeys: [],
+      decorationTab: 'symbol',
+      decorationFilter: {
+        symbol: 'all',
+        kaomoji: 'all',
+      },
+      recentDecorationKeys: [],
+      favoriteDecorationKeys: [],
       activePanel: '',
       status: '',
       statusType: 'neutral',
@@ -95,6 +112,38 @@ export default {
         .filter(Boolean)
     },
 
+    decorationCategories() {
+      return this.decorationTab === 'symbol' ? SYMBOL_CATEGORIES : KAOMOJI_CATEGORIES
+    },
+
+    activeDecorationFilter() {
+      return this.decorationFilter[this.decorationTab]
+    },
+
+    visibleDecorationSections() {
+      const items = this.decorationTab === 'symbol' ? SYMBOLS : KAOMOJI
+
+      if (this.activeDecorationFilter === 'recent') {
+        const recentItems = this.recentDecorationKeys
+          .map((key) => DECORATIONS.find((item) => decorationKey(item) === key))
+          .filter((item) => item?.type === this.decorationTab)
+        return recentItems.length ? [{ id: 'recent', label: '最近使用', items: recentItems }] : []
+      }
+
+      if (this.activeDecorationFilter === 'favorite') {
+        const favoriteItems = items.filter((item) =>
+          this.favoriteDecorationKeys.includes(decorationKey(item)),
+        )
+        return favoriteItems.length ? [{ id: 'favorite', label: '收藏', items: favoriteItems }] : []
+      }
+
+      return this.decorationCategories.map((category) => ({
+        id: category.id,
+        label: category.label,
+        items: items.filter((item) => item.category === category.id),
+      }))
+    },
+
     previewStyle() {
       return {
         color: this.editor.textColor,
@@ -107,6 +156,7 @@ export default {
   },
 
   async mounted() {
+    this.restoreDecorationPreferences()
     await this.restoreFonts()
   },
 
@@ -115,6 +165,8 @@ export default {
   },
 
   methods: {
+    decorationKey,
+
     setStatus(message, type = 'neutral') {
       this.status = message
       this.statusType = type
@@ -182,6 +234,53 @@ export default {
     rememberFont(key) {
       this.recentFontKeys = [key, ...this.recentFontKeys.filter((item) => item !== key)].slice(0, 3)
       localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(this.recentFontKeys))
+    },
+
+    restoreDecorationPreferences() {
+      try {
+        const recent = JSON.parse(localStorage.getItem(RECENT_DECORATIONS_KEY) || '[]')
+        const favorites = JSON.parse(localStorage.getItem(FAVORITE_DECORATIONS_KEY) || '[]')
+        if (Array.isArray(recent)) this.recentDecorationKeys = recent.slice(0, 20)
+        if (Array.isArray(favorites)) this.favoriteDecorationKeys = favorites
+      } catch {
+        this.recentDecorationKeys = []
+        this.favoriteDecorationKeys = []
+      }
+    },
+
+    setDecorationTab(tab) {
+      this.decorationTab = tab
+    },
+
+    setDecorationFilter(filter) {
+      this.decorationFilter[this.decorationTab] = filter
+    },
+
+    insertDecoration(item) {
+      this.$refs.noteInput?.insertText(item.value)
+      const key = decorationKey(item)
+      this.recentDecorationKeys = [
+        key,
+        ...this.recentDecorationKeys.filter((recentKey) => recentKey !== key),
+      ].slice(0, 20)
+      localStorage.setItem(RECENT_DECORATIONS_KEY, JSON.stringify(this.recentDecorationKeys))
+      this.setStatus(`${item.value} 已插入游標位置。`, 'success')
+    },
+
+    toggleDecorationFavorite(item) {
+      const key = decorationKey(item)
+      if (this.favoriteDecorationKeys.includes(key)) {
+        this.favoriteDecorationKeys = this.favoriteDecorationKeys.filter(
+          (favoriteKey) => favoriteKey !== key,
+        )
+      } else {
+        this.favoriteDecorationKeys = [...this.favoriteDecorationKeys, key]
+      }
+      localStorage.setItem(FAVORITE_DECORATIONS_KEY, JSON.stringify(this.favoriteDecorationKeys))
+    },
+
+    isDecorationFavorite(item) {
+      return this.favoriteDecorationKeys.includes(decorationKey(item))
     },
 
     selectBuiltinFont(font) {
@@ -406,7 +505,7 @@ export default {
       @copy="copyPng"
     />
 
-    <NoteInput v-model="editor.text" />
+    <NoteInput ref="noteInput" v-model="editor.text" />
 
     <section v-if="activePanel" class="mt-4 rounded-t-[26px] border border-b-0 border-stone-200 bg-white/80 p-5 shadow-[0_-14px_40px_rgba(72,63,54,0.06)]">
       <template v-if="activePanel === 'font'">
@@ -508,6 +607,72 @@ export default {
           </div>
           <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">尚未加入自訂字型</p>
         </div>
+      </template>
+
+      <template v-if="activePanel === 'symbols'">
+        <div class="mb-4 flex rounded-2xl bg-stone-100 p-1" role="tablist" aria-label="符號類型">
+          <button
+            v-for="tab in [{ id: 'symbol', label: '符號' }, { id: 'kaomoji', label: '顏文字' }]"
+            :key="tab.id"
+            class="min-h-10 flex-1 rounded-xl text-sm font-medium transition"
+            :class="decorationTab === tab.id ? 'bg-white text-stone-950 shadow-sm' : 'text-stone-500'"
+            type="button"
+            role="tab"
+            :aria-selected="decorationTab === tab.id"
+            @click="setDecorationTab(tab.id)"
+          >{{ tab.label }}</button>
+        </div>
+
+        <div class="mb-4 grid grid-cols-3 gap-1 rounded-2xl bg-stone-100 p-1">
+          <button
+            v-for="filter in [{ id: 'all', label: '全部' }, { id: 'recent', label: '最近' }, { id: 'favorite', label: '收藏' }]"
+            :key="filter.id"
+            class="min-h-9 rounded-xl text-xs transition"
+            :class="activeDecorationFilter === filter.id ? 'bg-white font-medium text-stone-950 shadow-sm' : 'text-stone-500'"
+            type="button"
+            @click="setDecorationFilter(filter.id)"
+          >{{ filter.label }}</button>
+        </div>
+
+        <div
+          v-if="visibleDecorationSections.length"
+          class="max-h-80 space-y-5 overflow-y-auto overscroll-contain pr-1"
+        >
+          <section v-for="section in visibleDecorationSections" :key="section.id">
+            <h3 class="sticky top-0 z-10 mb-2 bg-white/95 py-1 text-xs font-medium tracking-[0.08em] text-stone-500 backdrop-blur">
+              {{ section.label }}
+            </h3>
+            <div
+              class="grid gap-2"
+              :class="decorationTab === 'symbol' ? 'grid-cols-5' : 'grid-cols-1'"
+            >
+              <div
+                v-for="item in section.items"
+                :key="decorationKey(item)"
+                class="relative flex min-h-14 items-center rounded-2xl border border-stone-200 bg-white"
+              >
+                <button
+                  class="min-w-0 flex-1 px-2 py-3 text-center text-stone-800"
+                  :class="decorationTab === 'symbol' ? 'text-xl' : 'pr-11 text-base'"
+                  type="button"
+                  :aria-label="`插入 ${item.value}`"
+                  @click="insertDecoration(item)"
+                >{{ item.value }}</button>
+                <button
+                  class="absolute right-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs"
+                  :class="isDecorationFavorite(item) ? 'text-amber-500' : 'text-stone-300'"
+                  type="button"
+                  :aria-label="isDecorationFavorite(item) ? `取消收藏 ${item.value}` : `收藏 ${item.value}`"
+                  :aria-pressed="isDecorationFavorite(item)"
+                  @click="toggleDecorationFavorite(item)"
+                >{{ isDecorationFavorite(item) ? '★' : '☆' }}</button>
+              </div>
+            </div>
+          </section>
+        </div>
+        <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-8 text-center text-sm text-stone-500">
+          {{ activeDecorationFilter === 'recent' ? '還沒有最近使用的項目' : '還沒有收藏的項目' }}
+        </p>
       </template>
 
       <template v-if="activePanel === 'layout'">
