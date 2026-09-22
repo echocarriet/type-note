@@ -32,15 +32,10 @@ button {
   -webkit-tap-highlight-color: transparent;
 }
 
-.checkerboard {
-  background-color: #f1ede6;
-  background-image:
-    linear-gradient(45deg, rgba(66, 60, 54, 0.045) 25%, transparent 25%),
-    linear-gradient(-45deg, rgba(66, 60, 54, 0.045) 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, rgba(66, 60, 54, 0.045) 75%),
-    linear-gradient(-45deg, transparent 75%, rgba(66, 60, 54, 0.045) 75%);
-  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
-  background-size: 16px 16px;
+.preview-surface {
+  background:
+    radial-gradient(circle at 48% 45%, rgba(255, 255, 255, 0.72), transparent 52%),
+    linear-gradient(145deg, #f1ede6, #f7f4ee);
 }
 
 @supports (padding: max(0px)) {

@@ -1,5 +1,10 @@
 <script>
+import BottomToolbar from './components/BottomToolbar.vue'
+import EditorActions from './components/EditorActions.vue'
+import NoteInput from './components/NoteInput.vue'
+import StickerPreview from './components/StickerPreview.vue'
 import { deleteFont, getFonts, saveFont } from './services/fontDb'
+import { useEditorStore } from './stores/editor'
 import { renderStickerPng } from './utils/renderSticker'
 
 const FALLBACK_FONT = '-apple-system'
@@ -12,19 +17,23 @@ async function registerFont(fontRecord) {
   const fontFace = new FontFace(fontRecord.family, await fontRecord.file.arrayBuffer())
   const loadedFace = await fontFace.load()
   document.fonts.add(loadedFace)
-  return loadedFace
 }
 
 export default {
   name: 'App',
+  components: {
+    BottomToolbar,
+    EditorActions,
+    NoteInput,
+    StickerPreview,
+  },
 
   data() {
     return {
-      text: '今天也要慢慢來 ♡',
-      textColor: '#282522',
       fonts: [],
       selectedFontId: '',
-      status: '尚未加入自訂字型。',
+      activePanel: '',
+      status: '',
       statusType: 'neutral',
       isLoading: true,
       isRendering: false,
@@ -32,6 +41,10 @@ export default {
   },
 
   computed: {
+    editor() {
+      return useEditorStore()
+    },
+
     selectedFont() {
       return this.fonts.find((font) => font.id === this.selectedFontId) || null
     },
@@ -42,8 +55,11 @@ export default {
 
     previewStyle() {
       return {
-        color: this.textColor,
+        color: this.editor.textColor,
         fontFamily: `'${this.activeFontFamily}', sans-serif`,
+        letterSpacing: `${this.editor.letterSpacing}px`,
+        lineHeight: this.editor.lineHeight,
+        textAlign: this.editor.align,
       }
     },
   },
@@ -58,6 +74,15 @@ export default {
       this.statusType = type
     },
 
+    togglePanel(panel) {
+      this.activePanel = this.activePanel === panel ? '' : panel
+    },
+
+    resetStyle() {
+      this.editor.resetStyle()
+      this.setStatus('已重設樣式，文字內容保留。', 'success')
+    },
+
     async restoreFonts() {
       this.isLoading = true
 
@@ -66,16 +91,10 @@ export default {
           (left, right) => right.lastUsedAt - left.lastUsedAt,
         )
 
-        for (const font of savedFonts) {
-          await registerFont(font)
-        }
+        for (const font of savedFonts) await registerFont(font)
 
         this.fonts = savedFonts
-
-        if (savedFonts.length) {
-          this.selectedFontId = savedFonts[0].id
-          this.setStatus(`已從 IndexedDB 恢復 ${savedFonts.length} 個字型。`, 'success')
-        }
+        if (savedFonts.length) this.selectedFontId = savedFonts[0].id
       } catch (error) {
         console.error(error)
         this.setStatus('無法從 IndexedDB 恢復字型。', 'error')
@@ -137,11 +156,9 @@ export default {
       try {
         await deleteFont(font.id)
         this.fonts = this.fonts.filter((item) => item.id !== font.id)
-
         if (this.selectedFontId === font.id) {
           this.selectedFontId = this.fonts[0]?.id || ''
         }
-
         this.setStatus(`${font.name} 已從這台裝置刪除。`, 'success')
       } catch (error) {
         console.error(error)
@@ -151,9 +168,12 @@ export default {
 
     createPngBlob() {
       return renderStickerPng({
-        text: this.text,
+        text: this.editor.text,
         fontFamily: this.activeFontFamily,
-        color: this.textColor,
+        color: this.editor.textColor,
+        letterSpacing: this.editor.letterSpacing,
+        lineHeight: this.editor.lineHeight,
+        align: this.editor.align,
       })
     },
 
@@ -170,7 +190,7 @@ export default {
       navigator.clipboard
         .write([clipboardItem])
         .then(() => {
-          this.setStatus('PNG 已複製，請切換到 Instagram Story 貼上。', 'success')
+          this.setStatus('已複製 PNG，可以到 Instagram Story 貼上。', 'success')
         })
         .catch((error) => {
           console.error(error)
@@ -185,111 +205,111 @@ export default {
 </script>
 
 <template>
-  <main class="safe-bottom mx-auto flex min-h-svh w-full max-w-2xl flex-col px-5 pt-6 sm:px-8 sm:pt-10">
-    <header class="mb-7 flex items-start justify-between gap-4">
-      <div>
-        <p class="mb-1 text-xs font-semibold uppercase tracking-[0.18em] text-stone-500">
-          Phase 1 · 技術驗證
-        </p>
-        <h1 class="font-serif text-3xl tracking-tight text-stone-900">type note</h1>
-      </div>
-      <span class="rounded-full border border-stone-300 bg-white/60 px-3 py-1.5 text-xs text-stone-600">
-        iOS Safari 17+
-      </span>
+  <main class="mx-auto flex min-h-svh w-full max-w-[480px] flex-col bg-[#faf8f4] px-5 pt-[max(1.25rem,env(safe-area-inset-top))] shadow-[0_0_70px_rgba(64,55,46,0.08)] sm:px-6">
+    <header class="flex min-h-12 items-center justify-between px-1">
+      <h1 class="font-serif text-lg tracking-tight text-stone-900">type note</h1>
+      <button class="min-h-11 min-w-11 rounded-full text-xl text-stone-700 active:bg-stone-100" type="button" aria-label="更多選項">···</button>
     </header>
 
-    <section class="checkerboard mb-5 flex min-h-64 items-center justify-center rounded-[28px] border border-stone-200 p-8 shadow-[0_18px_50px_rgba(74,64,53,0.07)]">
-      <p
-        class="max-w-full whitespace-pre-wrap break-words text-center text-4xl leading-[1.4]"
-        :style="previewStyle"
-      >{{ text || '今天也要慢慢來 ♡' }}</p>
-    </section>
+    <StickerPreview :text="editor.text" :preview-style="previewStyle" />
 
-    <section class="mb-5 rounded-[24px] border border-stone-200 bg-white/75 p-5 shadow-[0_12px_35px_rgba(74,64,53,0.05)] backdrop-blur">
-      <label class="mb-2 block text-sm font-medium text-stone-700" for="sticker-text">測試文字</label>
-      <textarea
-        id="sticker-text"
-        v-model="text"
-        class="min-h-24 w-full resize-none rounded-2xl border border-stone-200 bg-white px-4 py-3 text-base leading-relaxed text-stone-900 outline-none transition focus:border-stone-500"
-        placeholder="輸入要測試的文字"
-      />
+    <EditorActions
+      :is-copying="isRendering"
+      @reset="resetStyle"
+      @copy="copyPng"
+    />
 
-      <div class="mt-4 flex items-center gap-3">
-        <label class="text-sm font-medium text-stone-700" for="text-color">文字顏色</label>
-        <input
-          id="text-color"
-          v-model="textColor"
-          type="color"
-          class="h-10 w-14 cursor-pointer rounded-xl border border-stone-200 bg-white p-1"
-        >
-        <code class="text-sm text-stone-500">{{ textColor }}</code>
-      </div>
-    </section>
+    <NoteInput v-model="editor.text" />
 
-    <section class="mb-5 rounded-[24px] border border-stone-200 bg-white/75 p-5 shadow-[0_12px_35px_rgba(74,64,53,0.05)] backdrop-blur">
-      <div class="mb-4 flex items-center justify-between gap-4">
-        <div>
-          <h2 class="font-medium text-stone-900">自訂字型</h2>
-          <p class="mt-1 text-sm text-stone-500">檔案只保存在目前瀏覽器的 IndexedDB。</p>
+    <section v-if="activePanel" class="mt-4 rounded-t-[26px] border border-b-0 border-stone-200 bg-white/80 p-5 shadow-[0_-14px_40px_rgba(72,63,54,0.06)]">
+      <template v-if="activePanel === 'font'">
+        <div class="mb-5 flex items-center justify-between gap-4">
+          <div>
+            <h2 class="font-medium text-stone-900">字體</h2>
+            <p class="mt-1 text-xs text-stone-500">字型只保存在目前瀏覽器。</p>
+          </div>
+          <label class="cursor-pointer rounded-full bg-stone-900 px-4 py-2.5 text-sm font-medium text-white active:scale-[0.98]">
+            ＋ 加入字型
+            <input
+              class="sr-only"
+              type="file"
+              accept=".ttf,.otf,font/ttf,font/otf"
+              :disabled="isLoading"
+              @change="handleFontFile"
+            >
+          </label>
         </div>
-        <label class="cursor-pointer rounded-full bg-stone-900 px-4 py-2.5 text-sm font-medium text-white transition active:scale-[0.98]">
-          加入字型
-          <input
-            class="sr-only"
-            type="file"
-            accept=".ttf,.otf,font/ttf,font/otf"
-            :disabled="isLoading"
-            @change="handleFontFile"
+
+        <div class="mb-5 flex items-center justify-between rounded-2xl bg-stone-50 px-4 py-3">
+          <label class="text-sm text-stone-700" for="text-color">文字顏色</label>
+          <div class="flex items-center gap-2">
+            <code class="text-xs text-stone-500">{{ editor.textColor }}</code>
+            <input
+              id="text-color"
+              v-model="editor.textColor"
+              type="color"
+              class="h-9 w-11 cursor-pointer rounded-xl border border-stone-200 bg-white p-1"
+            >
+          </div>
+        </div>
+
+        <div v-if="fonts.length" class="max-h-64 space-y-2 overflow-y-auto">
+          <div
+            v-for="font in fonts"
+            :key="font.id"
+            class="flex items-center gap-3 rounded-2xl border px-3 py-3"
+            :class="selectedFontId === font.id ? 'border-stone-700 bg-stone-50' : 'border-stone-200 bg-white'"
           >
-        </label>
-      </div>
-
-      <div v-if="fonts.length" class="space-y-2">
-        <div
-          v-for="font in fonts"
-          :key="font.id"
-          class="flex items-center gap-3 rounded-2xl border px-3 py-3"
-          :class="selectedFontId === font.id ? 'border-stone-700 bg-stone-50' : 'border-stone-200 bg-white'"
-        >
-          <button class="min-w-0 flex-1 text-left" type="button" @click="selectFont(font)">
-            <span class="block truncate text-lg text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
-            <span class="block truncate text-xs text-stone-500">{{ font.fileName }}</span>
-          </button>
-          <button
-            class="rounded-full px-3 py-2 text-xs text-stone-500 transition hover:bg-stone-100 hover:text-stone-900"
-            type="button"
-            @click="removeFont(font)"
-          >刪除</button>
+            <button class="min-w-0 flex-1 text-left" type="button" @click="selectFont(font)">
+              <span class="block truncate text-lg text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
+              <span class="block truncate text-xs text-stone-500">{{ font.fileName }}</span>
+            </button>
+            <button class="rounded-full px-3 py-2 text-xs text-stone-500 active:bg-stone-100" type="button" @click="removeFont(font)">刪除</button>
+          </div>
         </div>
-      </div>
-      <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">
-        尚未加入字型
-      </p>
-    </section>
+        <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">尚未加入自訂字型</p>
+      </template>
 
-    <section class="mb-5">
-      <button
-        class="w-full rounded-2xl bg-stone-900 px-4 py-3.5 text-sm font-medium text-white shadow-lg shadow-stone-400/20 transition active:scale-[0.98] disabled:opacity-50"
-        type="button"
-        :disabled="isRendering"
-        @click="copyPng"
-      >複製 PNG</button>
+      <template v-if="activePanel === 'layout'">
+        <h2 class="mb-5 font-medium text-stone-900">排版</h2>
+
+        <div class="mb-6">
+          <p class="mb-2 text-sm text-stone-700">對齊</p>
+          <div class="grid grid-cols-3 rounded-2xl bg-stone-100 p-1">
+            <button
+              v-for="option in [{ value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' }]"
+              :key="option.value"
+              class="rounded-xl px-3 py-2 text-sm transition"
+              :class="editor.align === option.value ? 'bg-white text-stone-950 shadow-sm' : 'text-stone-500'"
+              type="button"
+              @click="editor.align = option.value"
+            >{{ option.label }}</button>
+          </div>
+        </div>
+
+        <label class="mb-6 block">
+          <span class="mb-2 flex justify-between text-sm text-stone-700">
+            <span>字距</span><span>{{ editor.letterSpacing }} px</span>
+          </span>
+          <input v-model.number="editor.letterSpacing" class="w-full accent-stone-800" type="range" min="-4" max="20" step="1">
+        </label>
+
+        <label class="block">
+          <span class="mb-2 flex justify-between text-sm text-stone-700">
+            <span>行距</span><span>{{ editor.lineHeight.toFixed(1) }}</span>
+          </span>
+          <input v-model.number="editor.lineHeight" class="w-full accent-stone-800" type="range" min="0.8" max="2.4" step="0.1">
+        </label>
+      </template>
     </section>
 
     <p
-      class="rounded-2xl border px-4 py-3 text-sm leading-relaxed"
-      :class="{
-        'border-emerald-200 bg-emerald-50 text-emerald-800': statusType === 'success',
-        'border-red-200 bg-red-50 text-red-800': statusType === 'error',
-        'border-stone-200 bg-white/60 text-stone-600': statusType === 'neutral',
-      }"
+      v-if="status"
+      class="mx-1 my-3 rounded-xl px-3 py-2 text-center text-xs"
+      :class="statusType === 'error' ? 'bg-red-50 text-red-700' : 'bg-stone-100 text-stone-600'"
       role="status"
     >{{ status }}</p>
 
-    <ol class="mt-5 list-decimal space-y-2 pl-5 text-sm leading-relaxed text-stone-600">
-      <li>加入一個 .ttf 或 .otf 字型並確認預覽。</li>
-      <li>重新整理或關閉 Safari 後再開啟，確認字型自動恢復。</li>
-      <li>複製 PNG，切換到 Instagram Story 後貼上並放大。</li>
-    </ol>
+    <BottomToolbar :active-panel="activePanel" @select="togglePanel" />
   </main>
 </template>

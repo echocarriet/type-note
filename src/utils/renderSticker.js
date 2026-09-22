@@ -3,6 +3,40 @@ const LINE_HEIGHT = 1.35
 const SAFE_PADDING = 48
 const OUTPUT_SCALE = 3
 
+function getGraphemes(text) {
+  if (typeof Intl.Segmenter === 'function') {
+    const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+    return Array.from(segmenter.segment(text), ({ segment }) => segment)
+  }
+
+  return Array.from(text)
+}
+
+function measureLine(context, line, letterSpacing) {
+  const graphemes = getGraphemes(line || ' ')
+  const glyphWidth = graphemes.reduce(
+    (width, grapheme) => width + context.measureText(grapheme).width,
+    0,
+  )
+
+  return glyphWidth + Math.max(0, graphemes.length - 1) * letterSpacing
+}
+
+function drawLine(context, line, y, options) {
+  const { logicalWidth, letterSpacing, align } = options
+  const graphemes = getGraphemes(line || ' ')
+  const lineWidth = measureLine(context, line, letterSpacing)
+  let x = SAFE_PADDING
+
+  if (align === 'center') x = (logicalWidth - lineWidth) / 2
+  if (align === 'right') x = logicalWidth - SAFE_PADDING - lineWidth
+
+  graphemes.forEach((grapheme) => {
+    context.fillText(grapheme, x, y)
+    x += context.measureText(grapheme).width + letterSpacing
+  })
+}
+
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -12,8 +46,15 @@ function canvasToBlob(canvas) {
   })
 }
 
-export async function renderStickerPng({ text, fontFamily, color = '#282522' }) {
-  const content = text.trim() || '今天也要慢慢來 ♡'
+export async function renderStickerPng({
+  text,
+  fontFamily,
+  color = '#282522',
+  letterSpacing = 0,
+  lineHeight = 1.4,
+  align = 'center',
+}) {
+  const content = text || '今天也要慢慢來 ♡'
   const lines = content.split('\n')
   const measureCanvas = document.createElement('canvas')
   const measureContext = measureCanvas.getContext('2d')
@@ -24,9 +65,9 @@ export async function renderStickerPng({ text, fontFamily, color = '#282522' }) 
   measureContext.font = `${FONT_SIZE}px "${fontFamily}", sans-serif`
   measureContext.textBaseline = 'alphabetic'
 
-  const widths = lines.map((line) => measureContext.measureText(line || ' ').width)
+  const widths = lines.map((line) => measureLine(measureContext, line, letterSpacing))
   const logicalWidth = Math.ceil(Math.max(...widths) + SAFE_PADDING * 2)
-  const logicalHeight = Math.ceil(lines.length * FONT_SIZE * LINE_HEIGHT + SAFE_PADDING * 2)
+  const logicalHeight = Math.ceil(lines.length * FONT_SIZE * lineHeight + SAFE_PADDING * 2)
   const canvas = document.createElement('canvas')
   canvas.width = logicalWidth * OUTPUT_SCALE
   canvas.height = logicalHeight * OUTPUT_SCALE
@@ -38,12 +79,12 @@ export async function renderStickerPng({ text, fontFamily, color = '#282522' }) 
   context.clearRect(0, 0, logicalWidth, logicalHeight)
   context.font = `${FONT_SIZE}px "${fontFamily}", sans-serif`
   context.fillStyle = color
-  context.textAlign = 'center'
+  context.textAlign = 'left'
   context.textBaseline = 'middle'
 
   lines.forEach((line, index) => {
-    const y = SAFE_PADDING + FONT_SIZE * LINE_HEIGHT * index + (FONT_SIZE * LINE_HEIGHT) / 2
-    context.fillText(line || ' ', logicalWidth / 2, y)
+    const y = SAFE_PADDING + FONT_SIZE * lineHeight * index + (FONT_SIZE * lineHeight) / 2
+    drawLine(context, line, y, { logicalWidth, letterSpacing, align })
   })
 
   return canvasToBlob(canvas)
