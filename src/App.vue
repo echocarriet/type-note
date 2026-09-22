@@ -1,13 +1,17 @@
 <script>
+import Sortable from 'sortablejs'
 import BottomToolbar from './components/BottomToolbar.vue'
 import EditorActions from './components/EditorActions.vue'
 import NoteInput from './components/NoteInput.vue'
 import StickerPreview from './components/StickerPreview.vue'
+import { BUILTIN_FONTS, COMMON_COLORS } from './data/builtinFonts'
 import { deleteFont, getFonts, saveFont } from './services/fontDb'
 import { useEditorStore } from './stores/editor'
+import { hashFile } from './utils/fileHash'
 import { renderStickerPng } from './utils/renderSticker'
 
-const FALLBACK_FONT = '-apple-system'
+const RECENT_FONTS_KEY = 'type-note-recent-fonts'
+const registeredFontFaces = new Map()
 
 function fontFamilyFor(id) {
   return `type-note-${id.replaceAll('-', '')}`
@@ -16,7 +20,20 @@ function fontFamilyFor(id) {
 async function registerFont(fontRecord) {
   const fontFace = new FontFace(fontRecord.family, await fontRecord.file.arrayBuffer())
   const loadedFace = await fontFace.load()
+
+  const previousFace = registeredFontFaces.get(fontRecord.id)
+  if (previousFace) document.fonts.delete(previousFace)
+
   document.fonts.add(loadedFace)
+  registeredFontFaces.set(fontRecord.id, loadedFace)
+}
+
+function unregisterFont(id) {
+  const fontFace = registeredFontFaces.get(id)
+  if (!fontFace) return
+
+  document.fonts.delete(fontFace)
+  registeredFontFaces.delete(id)
 }
 
 export default {
@@ -30,13 +47,17 @@ export default {
 
   data() {
     return {
+      builtinFonts: BUILTIN_FONTS,
+      commonColors: COMMON_COLORS,
       fonts: [],
-      selectedFontId: '',
+      selectedFontKey: 'builtin:system-sans',
+      recentFontKeys: [],
       activePanel: '',
       status: '',
       statusType: 'neutral',
       isLoading: true,
       isRendering: false,
+      fontSorter: null,
     }
   },
 
@@ -45,18 +66,39 @@ export default {
       return useEditorStore()
     },
 
-    selectedFont() {
-      return this.fonts.find((font) => font.id === this.selectedFontId) || null
+    selectedCustomFont() {
+      if (!this.selectedFontKey.startsWith('custom:')) return null
+      const id = this.selectedFontKey.slice('custom:'.length)
+      return this.fonts.find((font) => font.id === id) || null
     },
 
     activeFontFamily() {
-      return this.selectedFont?.family || FALLBACK_FONT
+      if (this.selectedCustomFont) {
+        return `'${this.selectedCustomFont.family}', sans-serif`
+      }
+
+      const id = this.selectedFontKey.slice('builtin:'.length)
+      return this.builtinFonts.find((font) => font.id === id)?.family || this.builtinFonts[0].family
+    },
+
+    recentFonts() {
+      return this.recentFontKeys
+        .map((key) => {
+          if (key.startsWith('builtin:')) {
+            const font = this.builtinFonts.find((item) => item.id === key.slice('builtin:'.length))
+            return font ? { key, ...font, type: 'builtin' } : null
+          }
+
+          const font = this.fonts.find((item) => item.id === key.slice('custom:'.length))
+          return font ? { key, ...font, type: 'custom' } : null
+        })
+        .filter(Boolean)
     },
 
     previewStyle() {
       return {
         color: this.editor.textColor,
-        fontFamily: `'${this.activeFontFamily}', sans-serif`,
+        fontFamily: this.activeFontFamily,
         letterSpacing: `${this.editor.letterSpacing}px`,
         lineHeight: this.editor.lineHeight,
         textAlign: this.editor.align,
@@ -68,6 +110,10 @@ export default {
     await this.restoreFonts()
   },
 
+  beforeUnmount() {
+    this.destroyFontSorter()
+  },
+
   methods: {
     setStatus(message, type = 'neutral') {
       this.status = message
@@ -76,6 +122,56 @@ export default {
 
     togglePanel(panel) {
       this.activePanel = this.activePanel === panel ? '' : panel
+
+      if (this.activePanel === 'font') {
+        this.$nextTick(() => this.initializeFontSorter())
+      } else {
+        this.destroyFontSorter()
+      }
+    },
+
+    initializeFontSorter() {
+      this.destroyFontSorter()
+      if (!this.$refs.fontList) return
+
+      this.fontSorter = Sortable.create(this.$refs.fontList, {
+        animation: 180,
+        handle: '.drag-handle',
+        delay: 150,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 4,
+        forceFallback: true,
+        fallbackOnBody: true,
+        fallbackTolerance: 3,
+        ghostClass: 'font-sort-ghost',
+        chosenClass: 'font-sort-chosen',
+        onEnd: ({ oldIndex, newIndex }) => this.reorderFonts(oldIndex, newIndex),
+      })
+    },
+
+    destroyFontSorter() {
+      this.fontSorter?.destroy()
+      this.fontSorter = null
+    },
+
+    async reorderFonts(oldIndex, newIndex) {
+      if (oldIndex == null || newIndex == null || oldIndex === newIndex) return
+
+      const [movedFont] = this.fonts.splice(oldIndex, 1)
+      this.fonts.splice(newIndex, 0, movedFont)
+
+      try {
+        await Promise.all(
+          this.fonts.map((font, index) => {
+            font.sortOrder = index
+            return saveFont(font)
+          }),
+        )
+        this.setStatus('字體順序已儲存。', 'success')
+      } catch (error) {
+        console.error(error)
+        this.setStatus('無法儲存字體順序。', 'error')
+      }
     },
 
     resetStyle() {
@@ -83,18 +179,80 @@ export default {
       this.setStatus('已重設樣式，文字內容保留。', 'success')
     },
 
+    rememberFont(key) {
+      this.recentFontKeys = [key, ...this.recentFontKeys.filter((item) => item !== key)].slice(0, 3)
+      localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(this.recentFontKeys))
+    },
+
+    selectBuiltinFont(font) {
+      this.selectedFontKey = `builtin:${font.id}`
+      this.rememberFont(this.selectedFontKey)
+      this.setStatus(`目前使用 ${font.name}。`, 'success')
+    },
+
+    selectRecentFont(font) {
+      if (font.type === 'builtin') this.selectBuiltinFont(font)
+      else this.selectCustomFont(font)
+    },
+
+    setTextColor(color) {
+      this.editor.textColor = color.toUpperCase()
+    },
+
+    handleHexColor(event) {
+      let value = event.target.value.trim()
+      if (!value.startsWith('#')) value = `#${value}`
+
+      if (/^#[0-9a-f]{3}$/i.test(value)) {
+        value = `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}`
+      }
+
+      if (/^#[0-9a-f]{6}$/i.test(value)) {
+        this.setTextColor(value)
+      } else {
+        event.target.value = this.editor.textColor
+        this.setStatus('請輸入有效的 HEX 色碼。', 'error')
+      }
+    },
+
     async restoreFonts() {
       this.isLoading = true
 
       try {
-        const savedFonts = (await getFonts()).sort(
-          (left, right) => right.lastUsedAt - left.lastUsedAt,
-        )
+        const savedFonts = (await getFonts()).sort((left, right) => {
+          const leftOrder = Number.isInteger(left.sortOrder) ? left.sortOrder : Number.MAX_SAFE_INTEGER
+          const rightOrder = Number.isInteger(right.sortOrder) ? right.sortOrder : Number.MAX_SAFE_INTEGER
+          return leftOrder - rightOrder || right.lastUsedAt - left.lastUsedAt
+        })
 
-        for (const font of savedFonts) await registerFont(font)
+        for (const [index, font] of savedFonts.entries()) {
+          let shouldSave = false
+
+          if (!font.hash) {
+            font.hash = await hashFile(font.file)
+            shouldSave = true
+          }
+
+          if (!Number.isInteger(font.sortOrder)) {
+            font.sortOrder = index
+            shouldSave = true
+          }
+
+          if (shouldSave) await saveFont(font)
+          await registerFont(font)
+        }
 
         this.fonts = savedFonts
-        if (savedFonts.length) this.selectedFontId = savedFonts[0].id
+
+        try {
+          const storedRecentFonts = JSON.parse(localStorage.getItem(RECENT_FONTS_KEY) || '[]')
+          if (Array.isArray(storedRecentFonts)) this.recentFontKeys = storedRecentFonts.slice(0, 3)
+        } catch {
+          this.recentFontKeys = []
+        }
+
+        const firstAvailableRecentFont = this.recentFonts[0]
+        if (firstAvailableRecentFont) this.selectedFontKey = firstAvailableRecentFont.key
       } catch (error) {
         console.error(error)
         this.setStatus('無法從 IndexedDB 恢復字型。', 'error')
@@ -106,6 +264,7 @@ export default {
     async handleFontFile(event) {
       const input = event.target
       const file = input.files?.[0]
+      let newFontId = null
 
       if (!file) return
 
@@ -120,7 +279,18 @@ export default {
       this.setStatus('正在載入字型…')
 
       try {
+        const hash = await hashFile(file)
+        const duplicateFont = this.fonts.find((font) => font.hash === hash)
+
+        if (duplicateFont) {
+          this.selectedFontKey = `custom:${duplicateFont.id}`
+          this.rememberFont(this.selectedFontKey)
+          this.setStatus(`「${duplicateFont.name}」已加入，不會重複儲存。`, 'warning')
+          return
+        }
+
         const id = crypto.randomUUID()
+        newFontId = id
         const fontRecord = {
           id,
           name: file.name.replace(/\.(ttf|otf)$/i, ''),
@@ -128,15 +298,26 @@ export default {
           fileName: file.name,
           type: 'custom',
           file,
+          hash,
+          sortOrder: 0,
           lastUsedAt: Date.now(),
         }
 
         await registerFont(fontRecord)
+        await Promise.all(
+          this.fonts.map((font, index) => {
+            font.sortOrder = index + 1
+            return saveFont(font)
+          }),
+        )
         await saveFont(fontRecord)
         this.fonts = [fontRecord, ...this.fonts]
-        this.selectedFontId = id
+        this.selectedFontKey = `custom:${id}`
+        this.rememberFont(this.selectedFontKey)
         this.setStatus(`${fontRecord.name} 已儲存在這台裝置。`, 'success')
+        this.$nextTick(() => this.initializeFontSorter())
       } catch (error) {
+        if (newFontId) unregisterFont(newFontId)
         console.error(error)
         this.setStatus('字型無法載入，請改用另一個 .ttf 或 .otf 檔。', 'error')
       } finally {
@@ -145,21 +326,27 @@ export default {
       }
     },
 
-    async selectFont(font) {
-      this.selectedFontId = font.id
+    async selectCustomFont(font) {
+      this.selectedFontKey = `custom:${font.id}`
       font.lastUsedAt = Date.now()
       await saveFont(font)
+      this.rememberFont(this.selectedFontKey)
       this.setStatus(`目前使用 ${font.name}。`, 'success')
     },
 
     async removeFont(font) {
       try {
         await deleteFont(font.id)
+        unregisterFont(font.id)
         this.fonts = this.fonts.filter((item) => item.id !== font.id)
-        if (this.selectedFontId === font.id) {
-          this.selectedFontId = this.fonts[0]?.id || ''
+        const removedKey = `custom:${font.id}`
+        this.recentFontKeys = this.recentFontKeys.filter((key) => key !== removedKey)
+        localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(this.recentFontKeys))
+        if (this.selectedFontKey === removedKey) {
+          this.selectedFontKey = 'builtin:system-sans'
         }
         this.setStatus(`${font.name} 已從這台裝置刪除。`, 'success')
+        this.$nextTick(() => this.initializeFontSorter())
       } catch (error) {
         console.error(error)
         this.setStatus('無法刪除字型。', 'error')
@@ -240,34 +427,87 @@ export default {
           </label>
         </div>
 
-        <div class="mb-5 flex items-center justify-between rounded-2xl bg-stone-50 px-4 py-3">
-          <label class="text-sm text-stone-700" for="text-color">文字顏色</label>
-          <div class="flex items-center gap-2">
-            <code class="text-xs text-stone-500">{{ editor.textColor }}</code>
+        <div class="mb-6">
+          <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">內建字體</h3>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              v-for="font in builtinFonts"
+              :key="font.id"
+              class="min-h-16 rounded-2xl border px-2 py-3 text-sm transition"
+              :class="selectedFontKey === `builtin:${font.id}` ? 'border-stone-700 bg-stone-50 text-stone-950' : 'border-stone-200 bg-white text-stone-600'"
+              :style="{ fontFamily: font.family }"
+              type="button"
+              @click="selectBuiltinFont(font)"
+            >{{ font.name }}</button>
+          </div>
+        </div>
+
+        <div v-if="recentFonts.length" class="mb-6">
+          <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">最近使用</h3>
+          <div class="flex gap-2 overflow-x-auto pb-1">
+            <button
+              v-for="font in recentFonts"
+              :key="font.key"
+              class="shrink-0 rounded-full border px-4 py-2 text-sm"
+              :class="selectedFontKey === font.key ? 'border-stone-700 bg-stone-800 text-white' : 'border-stone-200 bg-white text-stone-600'"
+              :style="{ fontFamily: font.type === 'custom' ? `'${font.family}', sans-serif` : font.family }"
+              type="button"
+              @click="selectRecentFont(font)"
+            >{{ font.name }}</button>
+          </div>
+        </div>
+
+        <div class="mb-6">
+          <h3 class="mb-3 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">文字顏色</h3>
+          <div class="flex flex-wrap items-center gap-2">
+            <button
+              v-for="color in commonColors"
+              :key="color"
+              class="h-9 w-9 rounded-full border-2 shadow-sm transition"
+              :class="editor.textColor.toUpperCase() === color ? 'border-stone-800' : 'border-white'"
+              :style="{ backgroundColor: color }"
+              type="button"
+              :aria-label="`文字顏色 ${color}`"
+              @click="setTextColor(color)"
+            />
+            <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-lg text-stone-600">
+              ＋
+              <input id="text-color" v-model="editor.textColor" class="sr-only" type="color">
+            </label>
             <input
-              id="text-color"
-              v-model="editor.textColor"
-              type="color"
-              class="h-9 w-11 cursor-pointer rounded-xl border border-stone-200 bg-white p-1"
+              class="ml-auto h-10 w-24 rounded-xl border border-stone-200 bg-white px-3 text-center font-mono text-xs uppercase text-stone-700 outline-none focus:border-stone-500"
+              :value="editor.textColor"
+              aria-label="HEX 色碼"
+              maxlength="7"
+              @change="handleHexColor"
             >
           </div>
         </div>
 
-        <div v-if="fonts.length" class="max-h-64 space-y-2 overflow-y-auto">
+        <div>
+          <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">我的字體</h3>
+          <div v-if="fonts.length" ref="fontList" class="max-h-64 space-y-2 overflow-y-auto">
           <div
             v-for="font in fonts"
             :key="font.id"
-            class="flex items-center gap-3 rounded-2xl border px-3 py-3"
-            :class="selectedFontId === font.id ? 'border-stone-700 bg-stone-50' : 'border-stone-200 bg-white'"
+            :data-id="font.id"
+            class="font-sort-row flex select-none items-center gap-3 rounded-2xl border px-3 py-3"
+            :class="selectedFontKey === `custom:${font.id}` ? 'border-stone-700 bg-stone-50' : 'border-stone-200 bg-white'"
           >
-            <button class="min-w-0 flex-1 text-left" type="button" @click="selectFont(font)">
+            <button class="min-w-0 flex-1 text-left" type="button" @click="selectCustomFont(font)">
               <span class="block truncate text-lg text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
               <span class="block truncate text-xs text-stone-500">{{ font.fileName }}</span>
             </button>
             <button class="rounded-full px-3 py-2 text-xs text-stone-500 active:bg-stone-100" type="button" @click="removeFont(font)">刪除</button>
+            <button
+              class="drag-handle touch-none cursor-grab rounded-full px-2 py-2 text-lg leading-none text-stone-400 active:cursor-grabbing active:bg-stone-100"
+              type="button"
+              :aria-label="`拖拉排序 ${font.name}`"
+            >⠿</button>
           </div>
+          </div>
+          <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">尚未加入自訂字型</p>
         </div>
-        <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">尚未加入自訂字型</p>
       </template>
 
       <template v-if="activePanel === 'layout'">
@@ -306,7 +546,11 @@ export default {
     <p
       v-if="status"
       class="mx-1 my-3 rounded-xl px-3 py-2 text-center text-xs"
-      :class="statusType === 'error' ? 'bg-red-50 text-red-700' : 'bg-stone-100 text-stone-600'"
+      :class="{
+        'bg-red-50 text-red-700': statusType === 'error',
+        'bg-amber-50 text-amber-800': statusType === 'warning',
+        'bg-stone-100 text-stone-600': statusType !== 'error' && statusType !== 'warning',
+      }"
       role="status"
     >{{ status }}</p>
 

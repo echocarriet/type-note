@@ -38,6 +38,19 @@ button {
     linear-gradient(145deg, #f1ede6, #f7f4ee);
 }
 
+.font-sort-ghost {
+  opacity: 0.35;
+}
+
+.font-sort-chosen {
+  box-shadow: 0 12px 30px rgba(57, 50, 43, 0.14);
+}
+
+.drag-handle {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 @supports (padding: max(0px)) {
   .safe-bottom {
     padding-bottom: max(1.5rem, env(safe-area-inset-bottom));

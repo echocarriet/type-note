@@ -16,6 +16,10 @@ Phase 1 技術驗證已完成：
 - 預覽下方的重設與複製 PNG
 - Pinia Editor State
 - 文字顏色、字距、行距與對齊
+- 內建字體、自訂字體與最近使用字體
+- 以檔案內容辨識並阻擋重複字體
+- 「我的字體」觸控拖拉排序與順序保存
+- 常用色、Color Picker 與 HEX 色碼
 - 字體與排版工具面板
 
 ## Local development

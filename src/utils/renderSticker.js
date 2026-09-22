@@ -62,7 +62,7 @@ export async function renderStickerPng({
   if (!measureContext) throw new Error('此瀏覽器無法使用 Canvas。')
 
   await document.fonts.ready
-  measureContext.font = `${FONT_SIZE}px "${fontFamily}", sans-serif`
+  measureContext.font = `${FONT_SIZE}px ${fontFamily}`
   measureContext.textBaseline = 'alphabetic'
 
   const widths = lines.map((line) => measureLine(measureContext, line, letterSpacing))
@@ -77,7 +77,7 @@ export async function renderStickerPng({
 
   context.scale(OUTPUT_SCALE, OUTPUT_SCALE)
   context.clearRect(0, 0, logicalWidth, logicalHeight)
-  context.font = `${FONT_SIZE}px "${fontFamily}", sans-serif`
+  context.font = `${FONT_SIZE}px ${fontFamily}`
   context.fillStyle = color
   context.textAlign = 'left'
   context.textBaseline = 'middle'
