@@ -1,9 +1,10 @@
 <script>
+import { GripVertical, LoaderCircle, Plus, Star, Trash2 } from '@lucide/vue'
 import Sortable from 'sortablejs'
 import BottomToolbar from './components/BottomToolbar.vue'
-import EditorActions from './components/EditorActions.vue'
 import NoteInput from './components/NoteInput.vue'
 import StickerPreview from './components/StickerPreview.vue'
+import ToastMessage from './components/ToastMessage.vue'
 import { BUILTIN_FONTS, COMMON_COLORS } from './data/builtinFonts'
 import {
   DECORATIONS,
@@ -50,9 +51,14 @@ export default {
   name: 'App',
   components: {
     BottomToolbar,
-    EditorActions,
+    GripVertical,
+    LoaderCircle,
     NoteInput,
+    Plus,
+    Star,
     StickerPreview,
+    ToastMessage,
+    Trash2,
   },
 
   data() {
@@ -70,8 +76,10 @@ export default {
       recentDecorationKeys: [],
       favoriteDecorationKeys: [],
       activePanel: '',
-      status: '',
-      statusType: 'neutral',
+      inputLineCount: 1,
+      viewportHeight: 0,
+      toast: null,
+      toastTimer: null,
       isLoading: true,
       isRendering: false,
       fontSorter: null,
@@ -156,23 +164,46 @@ export default {
   },
 
   async mounted() {
+    this.updateViewportHeight()
+    window.addEventListener('resize', this.updateViewportHeight)
+    window.visualViewport?.addEventListener('resize', this.updateViewportHeight)
+    window.visualViewport?.addEventListener('scroll', this.updateViewportHeight)
     this.restoreDecorationPreferences()
     await this.restoreFonts()
   },
 
   beforeUnmount() {
     this.destroyFontSorter()
+    this.clearToast()
+    window.removeEventListener('resize', this.updateViewportHeight)
+    window.visualViewport?.removeEventListener('resize', this.updateViewportHeight)
+    window.visualViewport?.removeEventListener('scroll', this.updateViewportHeight)
   },
 
   methods: {
     decorationKey,
 
-    setStatus(message, type = 'neutral') {
-      this.status = message
-      this.statusType = type
+    updateViewportHeight() {
+      this.viewportHeight = Math.round(window.visualViewport?.height || window.innerHeight)
+    },
+
+    showToast(message, type = 'success', duration = 1500) {
+      this.clearToast()
+      this.toast = { id: Date.now(), message, type }
+      this.toastTimer = window.setTimeout(() => {
+        this.toast = null
+        this.toastTimer = null
+      }, duration)
+    },
+
+    clearToast() {
+      if (this.toastTimer) window.clearTimeout(this.toastTimer)
+      this.toastTimer = null
+      this.toast = null
     },
 
     togglePanel(panel) {
+      this.$refs.noteInput?.blur()
       this.activePanel = this.activePanel === panel ? '' : panel
 
       if (this.activePanel === 'font') {
@@ -219,16 +250,13 @@ export default {
             return saveFont(font)
           }),
         )
-        this.setStatus('字體順序已儲存。', 'success')
       } catch (error) {
         console.error(error)
-        this.setStatus('無法儲存字體順序。', 'error')
       }
     },
 
     resetStyle() {
       this.editor.resetStyle()
-      this.setStatus('已重設樣式，文字內容保留。', 'success')
     },
 
     rememberFont(key) {
@@ -242,7 +270,8 @@ export default {
         const favorites = JSON.parse(localStorage.getItem(FAVORITE_DECORATIONS_KEY) || '[]')
         if (Array.isArray(recent)) this.recentDecorationKeys = recent.slice(0, 20)
         if (Array.isArray(favorites)) this.favoriteDecorationKeys = favorites
-      } catch {
+      } catch (error) {
+        console.error(error)
         this.recentDecorationKeys = []
         this.favoriteDecorationKeys = []
       }
@@ -264,7 +293,6 @@ export default {
         ...this.recentDecorationKeys.filter((recentKey) => recentKey !== key),
       ].slice(0, 20)
       localStorage.setItem(RECENT_DECORATIONS_KEY, JSON.stringify(this.recentDecorationKeys))
-      this.setStatus(`${item.value} 已插入游標位置。`, 'success')
     },
 
     toggleDecorationFavorite(item) {
@@ -286,7 +314,6 @@ export default {
     selectBuiltinFont(font) {
       this.selectedFontKey = `builtin:${font.id}`
       this.rememberFont(this.selectedFontKey)
-      this.setStatus(`目前使用 ${font.name}。`, 'success')
     },
 
     selectRecentFont(font) {
@@ -310,7 +337,7 @@ export default {
         this.setTextColor(value)
       } else {
         event.target.value = this.editor.textColor
-        this.setStatus('請輸入有效的 HEX 色碼。', 'error')
+        console.error(new Error('請輸入有效的 HEX 色碼。'))
       }
     },
 
@@ -354,7 +381,6 @@ export default {
         if (firstAvailableRecentFont) this.selectedFontKey = firstAvailableRecentFont.key
       } catch (error) {
         console.error(error)
-        this.setStatus('無法從 IndexedDB 恢復字型。', 'error')
       } finally {
         this.isLoading = false
       }
@@ -369,13 +395,12 @@ export default {
 
       const extension = file.name.split('.').pop()?.toLowerCase()
       if (!['ttf', 'otf'].includes(extension)) {
-        this.setStatus('請選擇 .ttf 或 .otf 字型檔。', 'error')
+        console.error(new Error('請選擇 .ttf 或 .otf 字型檔。'))
         input.value = ''
         return
       }
 
       this.isLoading = true
-      this.setStatus('正在載入字型…')
 
       try {
         const hash = await hashFile(file)
@@ -384,7 +409,7 @@ export default {
         if (duplicateFont) {
           this.selectedFontKey = `custom:${duplicateFont.id}`
           this.rememberFont(this.selectedFontKey)
-          this.setStatus(`「${duplicateFont.name}」已加入，不會重複儲存。`, 'warning')
+          this.showToast(`「${duplicateFont.name}」已加入，不會重複儲存。`, 'warning', 2500)
           return
         }
 
@@ -413,12 +438,11 @@ export default {
         this.fonts = [fontRecord, ...this.fonts]
         this.selectedFontKey = `custom:${id}`
         this.rememberFont(this.selectedFontKey)
-        this.setStatus(`${fontRecord.name} 已儲存在這台裝置。`, 'success')
+        this.showToast(`${fontRecord.name} 已儲存在這台裝置。`)
         this.$nextTick(() => this.initializeFontSorter())
       } catch (error) {
         if (newFontId) unregisterFont(newFontId)
         console.error(error)
-        this.setStatus('字型無法載入，請改用另一個 .ttf 或 .otf 檔。', 'error')
       } finally {
         this.isLoading = false
         input.value = ''
@@ -430,7 +454,6 @@ export default {
       font.lastUsedAt = Date.now()
       await saveFont(font)
       this.rememberFont(this.selectedFontKey)
-      this.setStatus(`目前使用 ${font.name}。`, 'success')
     },
 
     async removeFont(font) {
@@ -444,11 +467,10 @@ export default {
         if (this.selectedFontKey === removedKey) {
           this.selectedFontKey = 'builtin:system-sans'
         }
-        this.setStatus(`${font.name} 已從這台裝置刪除。`, 'success')
+        this.showToast(`${font.name} 已從這台裝置刪除。`)
         this.$nextTick(() => this.initializeFontSorter())
       } catch (error) {
         console.error(error)
-        this.setStatus('無法刪除字型。', 'error')
       }
     },
 
@@ -465,22 +487,28 @@ export default {
 
     copyPng() {
       if (!navigator.clipboard || typeof ClipboardItem === 'undefined') {
-        this.setStatus('這個瀏覽器不支援 PNG Clipboard API。', 'error')
+        console.error(new Error('這個瀏覽器不支援 PNG Clipboard API。'))
         return
       }
 
       this.isRendering = true
-      const blobPromise = this.createPngBlob()
-      const clipboardItem = new ClipboardItem({ 'image/png': blobPromise })
+      let clipboardItem
+
+      try {
+        clipboardItem = new ClipboardItem({ 'image/png': this.createPngBlob() })
+      } catch (error) {
+        console.error(error)
+        this.isRendering = false
+        return
+      }
 
       navigator.clipboard
         .write([clipboardItem])
         .then(() => {
-          this.setStatus('已複製 PNG，可以到 Instagram Story 貼上。', 'success')
+          this.showToast('已複製 PNG，可以到 Instagram Story 貼上。')
         })
         .catch((error) => {
           console.error(error)
-          this.setStatus('複製失敗。請確認使用 HTTPS 並直接點擊複製按鈕。', 'error')
         })
         .finally(() => {
           this.isRendering = false
@@ -491,31 +519,49 @@ export default {
 </script>
 
 <template>
-  <main class="mx-auto flex min-h-svh w-full max-w-[480px] flex-col bg-[#faf8f4] px-5 pt-[max(1.25rem,env(safe-area-inset-top))] shadow-[0_0_70px_rgba(64,55,46,0.08)] sm:px-6">
-    <header class="flex min-h-12 items-center justify-between px-1">
-      <h1 class="font-serif text-lg tracking-tight text-stone-900">type note</h1>
-      <button class="min-h-11 min-w-11 rounded-full text-xl text-stone-700 active:bg-stone-100" type="button" aria-label="更多選項">···</button>
-    </header>
+  <main
+    class="mx-auto flex min-h-0 w-full max-w-[480px] flex-col overflow-hidden bg-[#faf8f4] px-5 pt-[max(0.75rem,env(safe-area-inset-top))] shadow-[0_0_70px_rgba(64,55,46,0.08)] sm:px-6"
+    :style="{ height: viewportHeight ? `${viewportHeight}px` : '100dvh' }"
+  >
+    <div class="relative shrink-0">
+      <StickerPreview
+        :text="editor.text"
+        :preview-style="previewStyle"
+        :is-copying="isRendering"
+        :line-count="inputLineCount"
+        @reset="resetStyle"
+        @copy="copyPng"
+      />
 
-    <StickerPreview :text="editor.text" :preview-style="previewStyle" />
+      <Transition name="toast">
+        <ToastMessage
+          v-if="toast"
+          :key="toast.id"
+          class="absolute bottom-0 left-1/2 z-30 -translate-x-1/2 translate-y-1/2"
+          :message="toast.message"
+          :type="toast.type"
+        />
+      </Transition>
+    </div>
 
-    <EditorActions
-      :is-copying="isRendering"
-      @reset="resetStyle"
-      @copy="copyPng"
-    />
+    <div class="flex min-h-0 flex-1 flex-col pt-3">
+      <NoteInput
+        ref="noteInput"
+        v-model="editor.text"
+        @line-count="inputLineCount = $event"
+      />
 
-    <NoteInput ref="noteInput" v-model="editor.text" />
-
-    <section v-if="activePanel" class="mt-4 rounded-t-[26px] border border-b-0 border-stone-200 bg-white/80 p-5 shadow-[0_-14px_40px_rgba(72,63,54,0.06)]">
+      <section v-if="activePanel" class="mt-3 min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-t-[26px] border border-b-0 border-stone-200 bg-white/80 p-5 pb-7 shadow-[0_-14px_40px_rgba(72,63,54,0.06)]">
       <template v-if="activePanel === 'font'">
         <div class="mb-5 flex items-center justify-between gap-4">
           <div>
             <h2 class="font-medium text-stone-900">字體</h2>
             <p class="mt-1 text-xs text-stone-500">字型只保存在目前瀏覽器。</p>
           </div>
-          <label class="cursor-pointer rounded-full bg-stone-900 px-4 py-2.5 text-sm font-medium text-white active:scale-[0.98]">
-            ＋ 加入字型
+          <label class="inline-flex min-h-11 cursor-pointer items-center gap-2 rounded-full bg-stone-900 px-4 py-2.5 text-sm font-medium text-white active:scale-[0.98]">
+            <LoaderCircle v-if="isLoading" class="animate-spin" :size="18" :stroke-width="1.75" aria-hidden="true" />
+            <Plus v-else :size="18" :stroke-width="1.75" aria-hidden="true" />
+            {{ isLoading ? '載入中…' : '加入字型' }}
             <input
               class="sr-only"
               type="file"
@@ -569,8 +615,8 @@ export default {
               :aria-label="`文字顏色 ${color}`"
               @click="setTextColor(color)"
             />
-            <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-lg text-stone-600">
-              ＋
+            <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600">
+              <Plus :size="18" :stroke-width="1.75" aria-hidden="true" />
               <input id="text-color" v-model="editor.textColor" class="sr-only" type="color">
             </label>
             <input
@@ -585,7 +631,7 @@ export default {
 
         <div>
           <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">我的字體</h3>
-          <div v-if="fonts.length" ref="fontList" class="max-h-64 space-y-2 overflow-y-auto">
+          <div v-if="fonts.length" ref="fontList" class="space-y-2">
           <div
             v-for="font in fonts"
             :key="font.id"
@@ -597,12 +643,21 @@ export default {
               <span class="block truncate text-lg text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
               <span class="block truncate text-xs text-stone-500">{{ font.fileName }}</span>
             </button>
-            <button class="rounded-full px-3 py-2 text-xs text-stone-500 active:bg-stone-100" type="button" @click="removeFont(font)">刪除</button>
             <button
-              class="drag-handle touch-none cursor-grab rounded-full px-2 py-2 text-lg leading-none text-stone-400 active:cursor-grabbing active:bg-stone-100"
+              class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-stone-100"
+              type="button"
+              :aria-label="`刪除 ${font.name}`"
+              @click="removeFont(font)"
+            >
+              <Trash2 :size="19" :stroke-width="1.75" aria-hidden="true" />
+            </button>
+            <button
+              class="drag-handle flex h-11 w-11 shrink-0 touch-none cursor-grab items-center justify-center rounded-full text-stone-400 active:cursor-grabbing active:bg-stone-100"
               type="button"
               :aria-label="`拖拉排序 ${font.name}`"
-            >⠿</button>
+            >
+              <GripVertical :size="20" :stroke-width="1.75" aria-hidden="true" />
+            </button>
           </div>
           </div>
           <p v-else class="rounded-2xl border border-dashed border-stone-300 px-4 py-6 text-center text-sm text-stone-500">尚未加入自訂字型</p>
@@ -636,7 +691,7 @@ export default {
 
         <div
           v-if="visibleDecorationSections.length"
-          class="max-h-80 space-y-5 overflow-y-auto overscroll-contain pr-1"
+          class="space-y-5 pr-1"
         >
           <section v-for="section in visibleDecorationSections" :key="section.id">
             <h3 class="sticky top-0 z-10 mb-2 bg-white/95 py-1 text-xs font-medium tracking-[0.08em] text-stone-500 backdrop-blur">
@@ -659,13 +714,20 @@ export default {
                   @click="insertDecoration(item)"
                 >{{ item.value }}</button>
                 <button
-                  class="absolute right-0.5 top-0.5 flex h-6 w-6 items-center justify-center rounded-full text-xs"
+                  class="absolute right-0.5 top-0.5 flex h-7 w-7 items-center justify-center rounded-full"
                   :class="isDecorationFavorite(item) ? 'text-amber-500' : 'text-stone-300'"
                   type="button"
                   :aria-label="isDecorationFavorite(item) ? `取消收藏 ${item.value}` : `收藏 ${item.value}`"
                   :aria-pressed="isDecorationFavorite(item)"
                   @click="toggleDecorationFavorite(item)"
-                >{{ isDecorationFavorite(item) ? '★' : '☆' }}</button>
+                >
+                  <Star
+                    :size="15"
+                    :stroke-width="1.75"
+                    :fill="isDecorationFavorite(item) ? 'currentColor' : 'none'"
+                    aria-hidden="true"
+                  />
+                </button>
               </div>
             </div>
           </section>
@@ -706,18 +768,9 @@ export default {
           <input v-model.number="editor.lineHeight" class="w-full accent-stone-800" type="range" min="0.8" max="2.4" step="0.1">
         </label>
       </template>
-    </section>
-
-    <p
-      v-if="status"
-      class="mx-1 my-3 rounded-xl px-3 py-2 text-center text-xs"
-      :class="{
-        'bg-red-50 text-red-700': statusType === 'error',
-        'bg-amber-50 text-amber-800': statusType === 'warning',
-        'bg-stone-100 text-stone-600': statusType !== 'error' && statusType !== 'warning',
-      }"
-      role="status"
-    >{{ status }}</p>
+      </section>
+      <div v-else class="min-h-0 flex-1" />
+    </div>
 
     <BottomToolbar :active-panel="activePanel" @select="togglePanel" />
   </main>

@@ -17,9 +17,14 @@ body {
   margin: 0;
   min-width: 320px;
   min-height: 100svh;
+  overflow: hidden;
   background:
     radial-gradient(circle at top left, rgba(255, 255, 255, 0.95), transparent 42%),
     #f4f0e9;
+}
+
+#app {
+  height: 100dvh;
 }
 
 button,
@@ -38,6 +43,14 @@ button {
     linear-gradient(145deg, #f1ede6, #f7f4ee);
 }
 
+.preview-text {
+  scrollbar-width: none;
+}
+
+.preview-text::-webkit-scrollbar {
+  display: none;
+}
+
 .font-sort-ghost {
   opacity: 0.35;
 }
@@ -49,6 +62,40 @@ button {
 .drag-handle {
   user-select: none;
   -webkit-user-select: none;
+}
+
+.toast-enter-active,
+.toast-leave-active {
+  transition: opacity 160ms ease, transform 160ms ease;
+}
+
+.toast-enter-from,
+.toast-leave-to {
+  opacity: 0;
+  transform: translate(-50%, calc(50% - 6px));
+}
+
+.editor-label-enter-active,
+.editor-label-leave-active {
+  max-height: 1.5rem;
+  overflow: hidden;
+  transition: max-height 140ms ease, margin 140ms ease, opacity 120ms ease;
+}
+
+.editor-label-enter-from,
+.editor-label-leave-to {
+  max-height: 0;
+  margin-bottom: 0;
+  opacity: 0;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .toast-enter-active,
+  .toast-leave-active,
+  .editor-label-enter-active,
+  .editor-label-leave-active {
+    transition: none;
+  }
 }
 
 @supports (padding: max(0px)) {
