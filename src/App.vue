@@ -48,6 +48,18 @@ function unregisterFont(id) {
   registeredFontFaces.delete(id)
 }
 
+function hexToRgba(hex, opacity) {
+  const value = hex.replace('#', '')
+  const normalized = value.length === 3
+    ? value.split('').map((character) => character.repeat(2)).join('')
+    : value
+  const number = Number.parseInt(normalized, 16)
+
+  if (!Number.isFinite(number)) return `rgba(0, 0, 0, ${opacity})`
+
+  return `rgba(${(number >> 16) & 255}, ${(number >> 8) & 255}, ${number & 255}, ${opacity})`
+}
+
 export default {
   name: 'App',
   components: {
@@ -148,6 +160,7 @@ export default {
         lineHeight: this.editor.lineHeight,
         align: this.editor.align,
         writingMode: this.editor.writingMode,
+        box: { ...this.editor.box },
       }
     },
 
@@ -244,6 +257,32 @@ export default {
               wordBreak: 'normal',
             }
           : {}),
+      }
+    },
+
+    boxStyle() {
+      const box = this.editor.box
+      const hasFill = ['fill', 'fill-stroke'].includes(box.type)
+      const hasStroke = ['stroke', 'fill-stroke'].includes(box.type)
+
+      if (box.type === 'none') {
+        return {
+          display: 'inline-flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }
+      }
+
+      return {
+        alignItems: 'center',
+        backgroundColor: hasFill ? hexToRgba(box.fillColor, box.fillOpacity) : 'transparent',
+        border: hasStroke
+          ? `${box.strokeWidth}px solid ${hexToRgba(box.strokeColor, box.strokeOpacity)}`
+          : 'none',
+        borderRadius: `${box.radius}px`,
+        display: 'inline-flex',
+        justifyContent: 'center',
+        padding: `${box.paddingY}px ${box.paddingX}px`,
       }
     },
   },
@@ -351,7 +390,7 @@ export default {
     },
 
     createHistorySnapshot() {
-      return { ...this.historyState }
+      return { ...this.historyState, box: { ...this.historyState.box } }
     },
 
     resetHistoryBaseline() {
@@ -362,11 +401,14 @@ export default {
     recordHistory(nextState) {
       if (!this.historyReady || this.isRestoringHistory) return
 
-      const snapshot = { ...nextState }
+      const snapshot = { ...nextState, box: { ...nextState.box } }
       if (JSON.stringify(snapshot) === JSON.stringify(this.lastHistorySnapshot)) return
 
       if (this.lastHistorySnapshot) {
-        this.undoStack = [...this.undoStack, this.lastHistorySnapshot].slice(-10)
+        this.undoStack = [
+          ...this.undoStack,
+          { ...this.lastHistorySnapshot, box: { ...this.lastHistorySnapshot.box } },
+        ].slice(-10)
       }
       this.lastHistorySnapshot = snapshot
     },
@@ -383,7 +425,11 @@ export default {
       this.editor.lineHeight = previousState.lineHeight
       this.editor.align = previousState.align
       this.editor.writingMode = previousState.writingMode
-      this.lastHistorySnapshot = { ...previousState }
+      if (previousState.box) this.editor.box = { ...previousState.box }
+      this.lastHistorySnapshot = {
+        ...previousState,
+        box: previousState.box ? { ...previousState.box } : { ...this.editor.box },
+      }
 
       this.$nextTick(() => {
         this.isRestoringHistory = false
@@ -479,6 +525,10 @@ export default {
       this.rememberRecentUsage('color', this.editor.textColor)
     },
 
+    previewTextColor(color) {
+      this.editor.textColor = color.toUpperCase()
+    },
+
     handleHexColor(event) {
       let value = event.target.value.trim()
       if (!value.startsWith('#')) value = `#${value}`
@@ -491,6 +541,35 @@ export default {
         this.setTextColor(value)
       } else {
         event.target.value = this.editor.textColor
+        console.error(new Error('請輸入有效的 HEX 色碼。'))
+      }
+    },
+
+    setBoxColor(property, color) {
+      this.editor.box[property] = color.toUpperCase()
+      this.rememberRecentUsage('color', this.editor.box[property])
+    },
+
+    previewBoxColor(property, color) {
+      this.editor.box[property] = color.toUpperCase()
+    },
+
+    useTextColorForBox(property) {
+      this.setBoxColor(property, this.editor.textColor)
+    },
+
+    handleBoxHex(event, property) {
+      let value = event.target.value.trim()
+      if (!value.startsWith('#')) value = `#${value}`
+
+      if (/^#[0-9a-f]{3}$/i.test(value)) {
+        value = `#${value[1]}${value[1]}${value[2]}${value[2]}${value[3]}${value[3]}`
+      }
+
+      if (/^#[0-9a-f]{6}$/i.test(value)) {
+        this.setBoxColor(property, value)
+      } else {
+        event.target.value = this.editor.box[property]
         console.error(new Error('請輸入有效的 HEX 色碼。'))
       }
     },
@@ -654,6 +733,7 @@ export default {
         lineHeight: this.editor.lineHeight,
         align: this.editor.align,
         writingMode: this.editor.writingMode,
+        box: { ...this.editor.box },
       })
     },
 
@@ -699,6 +779,7 @@ export default {
       <StickerPreview
         :text="editor.text"
         :preview-style="previewStyle"
+        :box-style="boxStyle"
         :is-copying="isRendering"
         :can-undo="undoStack.length > 0"
         :line-count="inputLineCount"
@@ -765,7 +846,7 @@ export default {
               </div>
             </div>
             <div v-if="recentColorItems.length">
-              <p class="mb-1.5 text-xs text-stone-500">文字顏色</p>
+              <p class="mb-1.5 text-xs text-stone-500">顏色</p>
               <div class="flex gap-2 overflow-x-auto pb-1">
                 <button
                   v-for="item in recentColorItems"
@@ -774,7 +855,7 @@ export default {
                   :class="editor.textColor === item.value ? 'border-stone-800' : 'border-white'"
                   :style="{ backgroundColor: item.value }"
                   type="button"
-                  :aria-label="`最近文字顏色 ${item.value}`"
+                  :aria-label="`最近使用顏色 ${item.value}`"
                   @click="setTextColor(item.value)"
                 />
               </div>
@@ -802,7 +883,8 @@ export default {
                 class="sr-only"
                 type="color"
                 :value="editor.textColor"
-                @input="setTextColor($event.target.value)"
+                @input="previewTextColor($event.target.value)"
+                @change="setTextColor($event.target.value)"
               >
             </label>
             <input
@@ -981,6 +1063,186 @@ export default {
           </span>
           <input v-model.number="editor.lineHeight" class="w-full accent-stone-800" type="range" min="0.8" max="2.4" step="0.1">
         </label>
+      </template>
+
+      <template v-if="activePanel === 'box'">
+        <h2 class="mb-5 font-medium text-stone-900">文字框</h2>
+
+        <div class="mb-6 grid grid-cols-4 gap-2">
+          <button
+            v-for="option in [
+              { value: 'none', label: '無' },
+              { value: 'fill', label: '實框' },
+              { value: 'stroke', label: '空框' },
+              { value: 'fill-stroke', label: '實框＋邊框' },
+            ]"
+            :key="option.value"
+            class="min-h-16 rounded-2xl border px-1.5 py-2 text-xs transition"
+            :class="editor.box.type === option.value ? 'border-stone-700 bg-stone-50 text-stone-950' : 'border-stone-200 bg-white text-stone-600'"
+            type="button"
+            @click="editor.box.type = option.value"
+          >
+            <span
+              class="mx-auto mb-1 block h-5 w-7"
+              :class="{
+                'rounded border border-stone-300 bg-transparent': option.value === 'none',
+                'rounded bg-stone-300': option.value === 'fill',
+                'rounded border-2 border-stone-500 bg-transparent': option.value === 'stroke',
+                'rounded border-2 border-stone-500 bg-stone-300': option.value === 'fill-stroke',
+              }"
+            />
+            {{ option.label }}
+          </button>
+        </div>
+
+        <div v-if="['fill', 'fill-stroke'].includes(editor.box.type)" class="mb-6">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h3 class="text-xs font-medium uppercase tracking-[0.12em] text-stone-400">背景色</h3>
+            <button
+              class="min-h-9 rounded-full border border-stone-200 bg-white px-3 text-xs text-stone-600 transition active:bg-stone-100"
+              type="button"
+              @click="useTextColorForBox('fillColor')"
+            >使用文字顏色</button>
+          </div>
+          <div v-if="recentColorItems.length" class="mb-3">
+            <p class="mb-1.5 text-xs text-stone-500">最近使用顏色</p>
+            <div class="flex gap-2 overflow-x-auto pb-1">
+              <button
+                v-for="item in recentColorItems"
+                :key="item.value"
+                class="h-9 w-9 shrink-0 rounded-full border-2 shadow-sm transition"
+                :class="editor.box.fillColor === item.value ? 'border-stone-800' : 'border-white'"
+                :style="{ backgroundColor: item.value }"
+                type="button"
+                :aria-label="`背景套用最近使用顏色 ${item.value}`"
+                @click="setBoxColor('fillColor', item.value)"
+              />
+            </div>
+          </div>
+          <div class="mb-4 flex flex-wrap items-center gap-2">
+            <button
+              v-for="color in commonColors"
+              :key="color"
+              class="h-9 w-9 rounded-full border-2 shadow-sm transition"
+              :class="editor.box.fillColor === color ? 'border-stone-800' : 'border-white'"
+              :style="{ backgroundColor: color }"
+              type="button"
+              :aria-label="`背景色 ${color}`"
+              @click="setBoxColor('fillColor', color)"
+            />
+            <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600">
+              <Plus :size="18" :stroke-width="1.75" aria-hidden="true" />
+              <input
+                class="sr-only"
+                type="color"
+                :value="editor.box.fillColor"
+                @input="previewBoxColor('fillColor', $event.target.value)"
+                @change="setBoxColor('fillColor', $event.target.value)"
+              >
+            </label>
+            <input
+              class="ml-auto h-10 w-24 rounded-xl border border-stone-200 bg-white px-3 text-center font-mono text-xs uppercase text-stone-700 outline-none focus:border-stone-500"
+              :value="editor.box.fillColor"
+              aria-label="背景色 HEX 色碼"
+              maxlength="7"
+              @change="handleBoxHex($event, 'fillColor')"
+            >
+          </div>
+          <label class="block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>背景不透明度</span><span>{{ Math.round(editor.box.fillOpacity * 100) }}%</span>
+            </span>
+            <input v-model.number="editor.box.fillOpacity" class="w-full accent-stone-800" type="range" min="0" max="1" step="0.05">
+          </label>
+        </div>
+
+        <div v-if="['stroke', 'fill-stroke'].includes(editor.box.type)" class="mb-6">
+          <div class="mb-3 flex items-center justify-between gap-3">
+            <h3 class="text-xs font-medium uppercase tracking-[0.12em] text-stone-400">邊框色</h3>
+            <button
+              class="min-h-9 rounded-full border border-stone-200 bg-white px-3 text-xs text-stone-600 transition active:bg-stone-100"
+              type="button"
+              @click="useTextColorForBox('strokeColor')"
+            >使用文字顏色</button>
+          </div>
+          <div v-if="recentColorItems.length" class="mb-3">
+            <p class="mb-1.5 text-xs text-stone-500">最近使用顏色</p>
+            <div class="flex gap-2 overflow-x-auto pb-1">
+              <button
+                v-for="item in recentColorItems"
+                :key="item.value"
+                class="h-9 w-9 shrink-0 rounded-full border-2 shadow-sm transition"
+                :class="editor.box.strokeColor === item.value ? 'border-stone-800' : 'border-white'"
+                :style="{ backgroundColor: item.value }"
+                type="button"
+                :aria-label="`邊框套用最近使用顏色 ${item.value}`"
+                @click="setBoxColor('strokeColor', item.value)"
+              />
+            </div>
+          </div>
+          <div class="mb-4 flex flex-wrap items-center gap-2">
+            <button
+              v-for="color in commonColors"
+              :key="color"
+              class="h-9 w-9 rounded-full border-2 shadow-sm transition"
+              :class="editor.box.strokeColor === color ? 'border-stone-800' : 'border-white'"
+              :style="{ backgroundColor: color }"
+              type="button"
+              :aria-label="`邊框色 ${color}`"
+              @click="setBoxColor('strokeColor', color)"
+            />
+            <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600">
+              <Plus :size="18" :stroke-width="1.75" aria-hidden="true" />
+              <input
+                class="sr-only"
+                type="color"
+                :value="editor.box.strokeColor"
+                @input="previewBoxColor('strokeColor', $event.target.value)"
+                @change="setBoxColor('strokeColor', $event.target.value)"
+              >
+            </label>
+            <input
+              class="ml-auto h-10 w-24 rounded-xl border border-stone-200 bg-white px-3 text-center font-mono text-xs uppercase text-stone-700 outline-none focus:border-stone-500"
+              :value="editor.box.strokeColor"
+              aria-label="邊框色 HEX 色碼"
+              maxlength="7"
+              @change="handleBoxHex($event, 'strokeColor')"
+            >
+          </div>
+          <label class="mb-6 block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>邊框不透明度</span><span>{{ Math.round(editor.box.strokeOpacity * 100) }}%</span>
+            </span>
+            <input v-model.number="editor.box.strokeOpacity" class="w-full accent-stone-800" type="range" min="0" max="1" step="0.05">
+          </label>
+          <label class="block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>邊框粗細</span><span>{{ editor.box.strokeWidth }} px</span>
+            </span>
+            <input v-model.number="editor.box.strokeWidth" class="w-full accent-stone-800" type="range" min="1" max="12" step="1">
+          </label>
+        </div>
+
+        <div v-if="editor.box.type !== 'none'" class="space-y-6">
+          <label class="block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>圓角</span><span>{{ editor.box.radius }} px</span>
+            </span>
+            <input v-model.number="editor.box.radius" class="w-full accent-stone-800" type="range" min="0" max="100" step="1">
+          </label>
+          <label class="block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>左右內距</span><span>{{ editor.box.paddingX }} px</span>
+            </span>
+            <input v-model.number="editor.box.paddingX" class="w-full accent-stone-800" type="range" min="0" max="64" step="1">
+          </label>
+          <label class="block">
+            <span class="mb-2 flex justify-between text-sm text-stone-700">
+              <span>上下內距</span><span>{{ editor.box.paddingY }} px</span>
+            </span>
+            <input v-model.number="editor.box.paddingY" class="w-full accent-stone-800" type="range" min="0" max="48" step="1">
+          </label>
+        </div>
       </template>
       </section>
       <div v-else class="min-h-0 flex-1" />

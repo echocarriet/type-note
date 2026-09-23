@@ -43,10 +43,12 @@ button {
     linear-gradient(145deg, #f1ede6, #f7f4ee);
 }
 
+.preview-box,
 .preview-text {
   scrollbar-width: none;
 }
 
+.preview-box::-webkit-scrollbar,
 .preview-text::-webkit-scrollbar {
   display: none;
 }

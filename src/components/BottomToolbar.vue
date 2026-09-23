@@ -6,7 +6,7 @@ const TOOLS = [
   { id: 'font', icon: markRaw(Type), label: '字體', enabled: true },
   { id: 'symbols', icon: markRaw(Sparkles), label: '符號', enabled: true },
   { id: 'layout', icon: markRaw(SlidersHorizontal), label: '排版', enabled: true },
-  { id: 'box', icon: markRaw(Square), label: '文字框', enabled: false },
+  { id: 'box', icon: markRaw(Square), label: '文字框', enabled: true },
 ]
 
 export default {

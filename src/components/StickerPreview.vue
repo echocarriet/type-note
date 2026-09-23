@@ -18,6 +18,10 @@ export default {
       type: Object,
       required: true,
     },
+    boxStyle: {
+      type: Object,
+      required: true,
+    },
     isCopying: {
       type: Boolean,
       default: false,
@@ -74,9 +78,11 @@ export default {
       </button>
     </div>
 
-    <p
-      class="preview-text max-h-full max-w-full overflow-auto whitespace-pre-wrap break-words text-4xl"
-      :style="previewStyle"
-    >{{ text }}</p>
+    <div class="preview-box max-h-full max-w-full overflow-auto" :style="boxStyle">
+      <p
+        class="preview-text max-h-full max-w-full whitespace-pre-wrap break-words text-4xl"
+        :style="previewStyle"
+      >{{ text }}</p>
+    </div>
   </section>
 </template>
