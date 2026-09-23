@@ -1,6 +1,11 @@
 <script>
+import { PenLine } from '@lucide/vue'
+
 export default {
   name: 'NoteInput',
+  components: {
+    PenLine,
+  },
   props: {
     modelValue: {
       type: String,
@@ -15,12 +20,11 @@ export default {
       lineCount: 1,
       resizeObserver: null,
       isFocused: false,
-      hasEdited: false,
     }
   },
   computed: {
     showEditorLabel() {
-      return !this.isFocused && !this.hasEdited
+      return !this.isFocused && !this.modelValue
     },
   },
   watch: {
@@ -38,7 +42,6 @@ export default {
   },
   methods: {
     updateValue(event) {
-      this.hasEdited = true
       this.$emit('update:modelValue', event.target.value)
       this.captureSelection(event)
       this.$nextTick(() => this.resizeTextarea())
@@ -93,7 +96,6 @@ export default {
       const nextValue = `${this.modelValue.slice(0, start)}${value}${this.modelValue.slice(end)}`
       const nextCursor = start + value.length
 
-      this.hasEdited = true
       this.$emit('update:modelValue', nextValue)
       this.selectionStart = nextCursor
       this.selectionEnd = nextCursor
@@ -112,6 +114,12 @@ export default {
       this.isFocused = false
       this.$refs.input?.blur()
     },
+
+    resetEmptyState() {
+      this.selectionStart = 0
+      this.selectionEnd = 0
+      this.blur()
+    },
   },
 }
 </script>
@@ -125,9 +133,9 @@ export default {
     <Transition name="editor-label">
       <label
         v-if="showEditorLabel"
-        class="mb-1 block px-3 text-xs font-medium tracking-[0.04em] text-stone-500"
+        class="mb-1 flex items-center gap-1.5 px-3 text-xs font-medium tracking-[0.04em] text-stone-500"
         for="sticker-text"
-      >編輯文字</label>
+      ><PenLine :size="14" :stroke-width="1.75" aria-hidden="true" />輸入文字</label>
     </Transition>
     <textarea
       ref="input"
@@ -135,7 +143,7 @@ export default {
       class="block w-full resize-none bg-transparent px-3 text-lg leading-relaxed text-stone-900 outline-none placeholder:text-stone-400"
       rows="1"
       :value="modelValue"
-      placeholder="輸入文字…"
+      :placeholder="isFocused ? '輸入文字…' : ''"
       @blur="handleBlur"
       @click="captureSelection"
       @focus="handleFocus"

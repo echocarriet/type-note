@@ -1,5 +1,4 @@
 const FONT_SIZE = 96
-const LINE_HEIGHT = 1.35
 const SAFE_PADDING = 48
 const OUTPUT_SCALE = 3
 
@@ -37,6 +36,26 @@ function drawLine(context, line, y, options) {
   })
 }
 
+function measureVerticalColumn(line, letterSpacing) {
+  const graphemes = getGraphemes(line || ' ')
+  return graphemes.length * FONT_SIZE + Math.max(0, graphemes.length - 1) * letterSpacing
+}
+
+function drawVerticalColumn(context, line, x, options) {
+  const { logicalHeight, letterSpacing, align } = options
+  const graphemes = getGraphemes(line || ' ')
+  const columnHeight = measureVerticalColumn(line, letterSpacing)
+  let y = SAFE_PADDING + FONT_SIZE / 2
+
+  if (align === 'center') y = (logicalHeight - columnHeight) / 2 + FONT_SIZE / 2
+  if (align === 'right') y = logicalHeight - SAFE_PADDING - columnHeight + FONT_SIZE / 2
+
+  graphemes.forEach((grapheme) => {
+    context.fillText(grapheme, x, y)
+    y += FONT_SIZE + letterSpacing
+  })
+}
+
 function canvasToBlob(canvas) {
   return new Promise((resolve, reject) => {
     canvas.toBlob((blob) => {
@@ -53,8 +72,9 @@ export async function renderStickerPng({
   letterSpacing = 0,
   lineHeight = 1.4,
   align = 'center',
+  writingMode = 'horizontal',
 }) {
-  const content = text || '今天也要慢慢來 ♡'
+  const content = text ?? ''
   const lines = content.split('\n')
   const measureCanvas = document.createElement('canvas')
   const measureContext = measureCanvas.getContext('2d')
@@ -65,9 +85,20 @@ export async function renderStickerPng({
   measureContext.font = `${FONT_SIZE}px ${fontFamily}`
   measureContext.textBaseline = 'alphabetic'
 
+  const isVertical = writingMode === 'vertical'
+  const columnStep = FONT_SIZE * lineHeight
   const widths = lines.map((line) => measureLine(measureContext, line, letterSpacing))
-  const logicalWidth = Math.ceil(Math.max(...widths) + SAFE_PADDING * 2)
-  const logicalHeight = Math.ceil(lines.length * FONT_SIZE * lineHeight + SAFE_PADDING * 2)
+  const columnHeights = lines.map((line) => measureVerticalColumn(line, letterSpacing))
+  const logicalWidth = Math.ceil(
+    isVertical
+      ? lines.length * columnStep + SAFE_PADDING * 2
+      : Math.max(...widths) + SAFE_PADDING * 2,
+  )
+  const logicalHeight = Math.ceil(
+    isVertical
+      ? Math.max(...columnHeights) + SAFE_PADDING * 2
+      : lines.length * FONT_SIZE * lineHeight + SAFE_PADDING * 2,
+  )
   const canvas = document.createElement('canvas')
   canvas.width = logicalWidth * OUTPUT_SCALE
   canvas.height = logicalHeight * OUTPUT_SCALE
@@ -79,13 +110,20 @@ export async function renderStickerPng({
   context.clearRect(0, 0, logicalWidth, logicalHeight)
   context.font = `${FONT_SIZE}px ${fontFamily}`
   context.fillStyle = color
-  context.textAlign = 'left'
+  context.textAlign = isVertical ? 'center' : 'left'
   context.textBaseline = 'middle'
 
-  lines.forEach((line, index) => {
-    const y = SAFE_PADDING + FONT_SIZE * lineHeight * index + (FONT_SIZE * lineHeight) / 2
-    drawLine(context, line, y, { logicalWidth, letterSpacing, align })
-  })
+  if (isVertical) {
+    lines.forEach((line, index) => {
+      const x = logicalWidth - SAFE_PADDING - columnStep * (index + 0.5)
+      drawVerticalColumn(context, line, x, { logicalHeight, letterSpacing, align })
+    })
+  } else {
+    lines.forEach((line, index) => {
+      const y = SAFE_PADDING + FONT_SIZE * lineHeight * index + (FONT_SIZE * lineHeight) / 2
+      drawLine(context, line, y, { logicalWidth, letterSpacing, align })
+    })
+  }
 
   return canvasToBlob(canvas)
 }

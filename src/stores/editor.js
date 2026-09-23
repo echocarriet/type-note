@@ -5,11 +5,12 @@ const DEFAULT_STYLE = {
   letterSpacing: 0,
   lineHeight: 1.4,
   align: 'center',
+  writingMode: 'horizontal',
 }
 
 export const useEditorStore = defineStore('editor', {
   state: () => ({
-    text: '今天也要慢慢來 ♡',
+    text: '',
     ...DEFAULT_STYLE,
   }),
 

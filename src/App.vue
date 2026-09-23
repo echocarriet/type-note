@@ -20,6 +20,7 @@ import { hashFile } from './utils/fileHash'
 import { renderStickerPng } from './utils/renderSticker'
 
 const RECENT_FONTS_KEY = 'type-note-recent-fonts'
+const RECENT_USAGE_KEY = 'type-note-recent-usage'
 const RECENT_DECORATIONS_KEY = 'type-note-recent-decorations'
 const FAVORITE_DECORATIONS_KEY = 'type-note-favorite-decorations'
 const registeredFontFaces = new Map()
@@ -67,7 +68,7 @@ export default {
       commonColors: COMMON_COLORS,
       fonts: [],
       selectedFontKey: 'builtin:system-sans',
-      recentFontKeys: [],
+      recentUsage: [],
       decorationTab: 'symbol',
       decorationFilter: {
         symbol: 'all',
@@ -83,6 +84,10 @@ export default {
       isLoading: true,
       isRendering: false,
       fontSorter: null,
+      undoStack: [],
+      isRestoringHistory: false,
+      historyReady: false,
+      lastHistorySnapshot: null,
     }
   },
 
@@ -106,18 +111,44 @@ export default {
       return this.builtinFonts.find((font) => font.id === id)?.family || this.builtinFonts[0].family
     },
 
-    recentFonts() {
-      return this.recentFontKeys
-        .map((key) => {
-          if (key.startsWith('builtin:')) {
-            const font = this.builtinFonts.find((item) => item.id === key.slice('builtin:'.length))
-            return font ? { key, ...font, type: 'builtin' } : null
-          }
+    recentUsageItems() {
+      return this.recentUsage
+        .map((item) => {
+          if (item.type === 'color') return item
 
-          const font = this.fonts.find((item) => item.id === key.slice('custom:'.length))
-          return font ? { key, ...font, type: 'custom' } : null
+          const font = item.value.startsWith('builtin:')
+            ? this.builtinFonts.find((candidate) => candidate.id === item.value.slice('builtin:'.length))
+            : this.fonts.find((candidate) => candidate.id === item.value.slice('custom:'.length))
+
+          return font
+            ? {
+                ...item,
+                font,
+                fontType: item.value.startsWith('builtin:') ? 'builtin' : 'custom',
+              }
+            : null
         })
         .filter(Boolean)
+    },
+
+    recentFontItems() {
+      return this.recentUsageItems.filter((item) => item.type === 'font')
+    },
+
+    recentColorItems() {
+      return this.recentUsageItems.filter((item) => item.type === 'color')
+    },
+
+    historyState() {
+      return {
+        text: this.editor.text,
+        selectedFontKey: this.selectedFontKey,
+        textColor: this.editor.textColor,
+        letterSpacing: this.editor.letterSpacing,
+        lineHeight: this.editor.lineHeight,
+        align: this.editor.align,
+        writingMode: this.editor.writingMode,
+      }
     },
 
     decorationCategories() {
@@ -152,14 +183,77 @@ export default {
       }))
     },
 
+    alignmentOptions() {
+      if (this.editor.writingMode === 'vertical') {
+        return [
+          { value: 'left', label: '上' },
+          { value: 'center', label: '中' },
+          { value: 'right', label: '下' },
+        ]
+      }
+
+      return [
+        { value: 'left', label: '左' },
+        { value: 'center', label: '中' },
+        { value: 'right', label: '右' },
+      ]
+    },
+
+    previewHeight() {
+      return this.viewportHeight ? Math.round(this.viewportHeight * 0.5) : 0
+    },
+
+    horizontalPreviewFontSize() {
+      return {
+        1: '36px',
+        2: '36px',
+        3: '32px',
+        4: '28px',
+      }[Math.min(4, Math.max(1, this.inputLineCount))]
+    },
+
+    verticalPreviewFontSize() {
+      const longestLine = Math.max(
+        ...this.editor.text.split('\n').map((line) => Array.from(line || ' ').length),
+      )
+      const availableHeight = Math.max(1, this.previewHeight - 80)
+
+      return `${Math.max(16, Math.min(36, Math.floor(availableHeight / longestLine)))}px`
+    },
+
     previewStyle() {
+      const isVertical = this.editor.writingMode === 'vertical'
+
       return {
         color: this.editor.textColor,
         fontFamily: this.activeFontFamily,
+        fontSize: isVertical ? this.verticalPreviewFontSize : this.horizontalPreviewFontSize,
         letterSpacing: `${this.editor.letterSpacing}px`,
         lineHeight: this.editor.lineHeight,
-        textAlign: this.editor.align,
+        textAlign:
+          isVertical
+            ? { left: 'start', center: 'center', right: 'end' }[this.editor.align]
+            : this.editor.align,
+        textOrientation: isVertical ? 'upright' : 'mixed',
+        writingMode: isVertical ? 'vertical-rl' : 'horizontal-tb',
+        ...(isVertical
+          ? {
+              fontSize: this.verticalPreviewFontSize,
+              overflowWrap: 'normal',
+              whiteSpace: 'pre',
+              wordBreak: 'normal',
+            }
+          : {}),
       }
+    },
+  },
+
+  watch: {
+    historyState: {
+      deep: true,
+      handler(nextState) {
+        this.recordHistory(nextState)
+      },
     },
   },
 
@@ -170,6 +264,7 @@ export default {
     window.visualViewport?.addEventListener('scroll', this.updateViewportHeight)
     this.restoreDecorationPreferences()
     await this.restoreFonts()
+    this.resetHistoryBaseline()
   },
 
   beforeUnmount() {
@@ -255,13 +350,71 @@ export default {
       }
     },
 
-    resetStyle() {
-      this.editor.resetStyle()
+    createHistorySnapshot() {
+      return { ...this.historyState }
+    },
+
+    resetHistoryBaseline() {
+      this.lastHistorySnapshot = this.createHistorySnapshot()
+      this.historyReady = true
+    },
+
+    recordHistory(nextState) {
+      if (!this.historyReady || this.isRestoringHistory) return
+
+      const snapshot = { ...nextState }
+      if (JSON.stringify(snapshot) === JSON.stringify(this.lastHistorySnapshot)) return
+
+      if (this.lastHistorySnapshot) {
+        this.undoStack = [...this.undoStack, this.lastHistorySnapshot].slice(-10)
+      }
+      this.lastHistorySnapshot = snapshot
+    },
+
+    undo() {
+      const previousState = this.undoStack.pop()
+      if (!previousState) return
+
+      this.isRestoringHistory = true
+      this.editor.text = previousState.text
+      this.selectedFontKey = previousState.selectedFontKey
+      this.editor.textColor = previousState.textColor
+      this.editor.letterSpacing = previousState.letterSpacing
+      this.editor.lineHeight = previousState.lineHeight
+      this.editor.align = previousState.align
+      this.editor.writingMode = previousState.writingMode
+      this.lastHistorySnapshot = { ...previousState }
+
+      this.$nextTick(() => {
+        this.isRestoringHistory = false
+      })
+    },
+
+    clearText() {
+      if (!this.editor.text) return
+      this.editor.text = ''
+      this.$refs.noteInput?.resetEmptyState()
+    },
+
+    persistRecentUsage() {
+      localStorage.setItem(RECENT_USAGE_KEY, JSON.stringify(this.recentUsage))
+    },
+
+    rememberRecentUsage(type, value) {
+      const item = { type, value, usedAt: Date.now() }
+      const limits = { font: 3, color: 5 }
+      const uniqueItems = [item, ...this.recentUsage.filter((entry) => !(entry.type === type && entry.value === value))]
+      const counts = { font: 0, color: 0 }
+
+      this.recentUsage = uniqueItems.filter((entry) => {
+        counts[entry.type] += 1
+        return counts[entry.type] <= limits[entry.type]
+      })
+      this.persistRecentUsage()
     },
 
     rememberFont(key) {
-      this.recentFontKeys = [key, ...this.recentFontKeys.filter((item) => item !== key)].slice(0, 3)
-      localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(this.recentFontKeys))
+      this.rememberRecentUsage('font', key)
     },
 
     restoreDecorationPreferences() {
@@ -317,12 +470,13 @@ export default {
     },
 
     selectRecentFont(font) {
-      if (font.type === 'builtin') this.selectBuiltinFont(font)
-      else this.selectCustomFont(font)
+      if (font.fontType === 'builtin') this.selectBuiltinFont(font.font)
+      else this.selectCustomFont(font.font)
     },
 
     setTextColor(color) {
       this.editor.textColor = color.toUpperCase()
+      this.rememberRecentUsage('color', this.editor.textColor)
     },
 
     handleHexColor(event) {
@@ -371,14 +525,29 @@ export default {
         this.fonts = savedFonts
 
         try {
-          const storedRecentFonts = JSON.parse(localStorage.getItem(RECENT_FONTS_KEY) || '[]')
-          if (Array.isArray(storedRecentFonts)) this.recentFontKeys = storedRecentFonts.slice(0, 3)
-        } catch {
-          this.recentFontKeys = []
+          const storedUsage = JSON.parse(localStorage.getItem(RECENT_USAGE_KEY) || 'null')
+          if (Array.isArray(storedUsage)) {
+            this.recentUsage = storedUsage.filter(
+              (item) =>
+                item &&
+                ['font', 'color'].includes(item.type) &&
+                typeof item.value === 'string',
+            )
+          } else {
+            const legacyFonts = JSON.parse(localStorage.getItem(RECENT_FONTS_KEY) || '[]')
+            if (Array.isArray(legacyFonts)) {
+              this.recentUsage = legacyFonts.slice(0, 3).map((value, index) => ({
+                type: 'font',
+                value,
+                usedAt: Date.now() - index,
+              }))
+              if (this.recentUsage.length) this.persistRecentUsage()
+            }
+          }
+        } catch (error) {
+          console.error(error)
+          this.recentUsage = []
         }
-
-        const firstAvailableRecentFont = this.recentFonts[0]
-        if (firstAvailableRecentFont) this.selectedFontKey = firstAvailableRecentFont.key
       } catch (error) {
         console.error(error)
       } finally {
@@ -462,8 +631,10 @@ export default {
         unregisterFont(font.id)
         this.fonts = this.fonts.filter((item) => item.id !== font.id)
         const removedKey = `custom:${font.id}`
-        this.recentFontKeys = this.recentFontKeys.filter((key) => key !== removedKey)
-        localStorage.setItem(RECENT_FONTS_KEY, JSON.stringify(this.recentFontKeys))
+        this.recentUsage = this.recentUsage.filter(
+          (item) => !(item.type === 'font' && item.value === removedKey),
+        )
+        this.persistRecentUsage()
         if (this.selectedFontKey === removedKey) {
           this.selectedFontKey = 'builtin:system-sans'
         }
@@ -482,6 +653,7 @@ export default {
         letterSpacing: this.editor.letterSpacing,
         lineHeight: this.editor.lineHeight,
         align: this.editor.align,
+        writingMode: this.editor.writingMode,
       })
     },
 
@@ -528,8 +700,11 @@ export default {
         :text="editor.text"
         :preview-style="previewStyle"
         :is-copying="isRendering"
+        :can-undo="undoStack.length > 0"
         :line-count="inputLineCount"
-        @reset="resetStyle"
+        :preview-height="previewHeight"
+        @delete="clearText"
+        @undo="undo"
         @copy="copyPng"
       />
 
@@ -572,33 +747,38 @@ export default {
           </label>
         </div>
 
-        <div class="mb-6">
-          <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">內建字體</h3>
-          <div class="grid grid-cols-3 gap-2">
-            <button
-              v-for="font in builtinFonts"
-              :key="font.id"
-              class="min-h-16 rounded-2xl border px-2 py-3 text-sm transition"
-              :class="selectedFontKey === `builtin:${font.id}` ? 'border-stone-700 bg-stone-50 text-stone-950' : 'border-stone-200 bg-white text-stone-600'"
-              :style="{ fontFamily: font.family }"
-              type="button"
-              @click="selectBuiltinFont(font)"
-            >{{ font.name }}</button>
-          </div>
-        </div>
-
-        <div v-if="recentFonts.length" class="mb-6">
+        <div v-if="recentUsageItems.length" class="mb-6">
           <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">最近使用</h3>
-          <div class="flex gap-2 overflow-x-auto pb-1">
-            <button
-              v-for="font in recentFonts"
-              :key="font.key"
-              class="shrink-0 rounded-full border px-4 py-2 text-sm"
-              :class="selectedFontKey === font.key ? 'border-stone-700 bg-stone-800 text-white' : 'border-stone-200 bg-white text-stone-600'"
-              :style="{ fontFamily: font.type === 'custom' ? `'${font.family}', sans-serif` : font.family }"
-              type="button"
-              @click="selectRecentFont(font)"
-            >{{ font.name }}</button>
+          <div class="space-y-3">
+            <div v-if="recentFontItems.length">
+              <p class="mb-1.5 text-xs text-stone-500">字體</p>
+              <div class="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  v-for="item in recentFontItems"
+                  :key="item.value"
+                  class="shrink-0 rounded-full border px-4 py-2 text-sm"
+                  :class="selectedFontKey === item.value ? 'border-stone-700 bg-stone-800 text-white' : 'border-stone-200 bg-white text-stone-600'"
+                  :style="{ fontFamily: item.fontType === 'custom' ? `'${item.font.family}', sans-serif` : item.font.family }"
+                  type="button"
+                  @click="selectRecentFont(item)"
+                >{{ item.font.name }}</button>
+              </div>
+            </div>
+            <div v-if="recentColorItems.length">
+              <p class="mb-1.5 text-xs text-stone-500">文字顏色</p>
+              <div class="flex gap-2 overflow-x-auto pb-1">
+                <button
+                  v-for="item in recentColorItems"
+                  :key="item.value"
+                  class="h-10 w-10 shrink-0 rounded-full border-2 shadow-sm transition"
+                  :class="editor.textColor === item.value ? 'border-stone-800' : 'border-white'"
+                  :style="{ backgroundColor: item.value }"
+                  type="button"
+                  :aria-label="`最近文字顏色 ${item.value}`"
+                  @click="setTextColor(item.value)"
+                />
+              </div>
+            </div>
           </div>
         </div>
 
@@ -617,7 +797,13 @@ export default {
             />
             <label class="flex h-9 w-9 cursor-pointer items-center justify-center rounded-full border border-stone-200 bg-white text-stone-600">
               <Plus :size="18" :stroke-width="1.75" aria-hidden="true" />
-              <input id="text-color" v-model="editor.textColor" class="sr-only" type="color">
+              <input
+                id="text-color"
+                class="sr-only"
+                type="color"
+                :value="editor.textColor"
+                @input="setTextColor($event.target.value)"
+              >
             </label>
             <input
               class="ml-auto h-10 w-24 rounded-xl border border-stone-200 bg-white px-3 text-center font-mono text-xs uppercase text-stone-700 outline-none focus:border-stone-500"
@@ -629,6 +815,21 @@ export default {
           </div>
         </div>
 
+        <div class="mb-6">
+          <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">內建字體</h3>
+          <div class="grid grid-cols-3 gap-2">
+            <button
+              v-for="font in builtinFonts"
+              :key="font.id"
+              class="min-h-12 rounded-2xl border px-2 py-2 text-sm transition"
+              :class="selectedFontKey === `builtin:${font.id}` ? 'border-stone-700 bg-stone-50 text-stone-950' : 'border-stone-200 bg-white text-stone-600'"
+              :style="{ fontFamily: font.family }"
+              type="button"
+              @click="selectBuiltinFont(font)"
+            >{{ font.name }}</button>
+          </div>
+        </div>
+
         <div>
           <h3 class="mb-2 text-xs font-medium uppercase tracking-[0.12em] text-stone-400">我的字體</h3>
           <div v-if="fonts.length" ref="fontList" class="space-y-2">
@@ -636,12 +837,11 @@ export default {
             v-for="font in fonts"
             :key="font.id"
             :data-id="font.id"
-            class="font-sort-row flex select-none items-center gap-3 rounded-2xl border px-3 py-3"
+            class="font-sort-row flex select-none items-center gap-2 rounded-2xl border px-3 py-[5px]"
             :class="selectedFontKey === `custom:${font.id}` ? 'border-stone-700 bg-stone-50' : 'border-stone-200 bg-white'"
           >
             <button class="min-w-0 flex-1 text-left" type="button" @click="selectCustomFont(font)">
-              <span class="block truncate text-lg text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
-              <span class="block truncate text-xs text-stone-500">{{ font.fileName }}</span>
+              <span class="block truncate text-base text-stone-900" :style="{ fontFamily: `'${font.family}', sans-serif` }">{{ font.name }}</span>
             </button>
             <button
               class="flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-stone-100"
@@ -741,10 +941,24 @@ export default {
         <h2 class="mb-5 font-medium text-stone-900">排版</h2>
 
         <div class="mb-6">
-          <p class="mb-2 text-sm text-stone-700">對齊</p>
+          <p class="mb-2 text-sm text-stone-700">方向</p>
+          <div class="grid grid-cols-2 rounded-2xl bg-stone-100 p-1">
+            <button
+              v-for="option in [{ value: 'horizontal', label: '橫排' }, { value: 'vertical', label: '直排' }]"
+              :key="option.value"
+              class="min-h-10 rounded-xl px-3 py-2 text-sm transition"
+              :class="editor.writingMode === option.value ? 'bg-white text-stone-950 shadow-sm' : 'text-stone-500'"
+              type="button"
+              @click="editor.writingMode = option.value"
+            >{{ option.label }}</button>
+          </div>
+        </div>
+
+        <div class="mb-6">
+          <p class="mb-2 text-sm text-stone-700">{{ editor.writingMode === 'vertical' ? '垂直對齊' : '對齊' }}</p>
           <div class="grid grid-cols-3 rounded-2xl bg-stone-100 p-1">
             <button
-              v-for="option in [{ value: 'left', label: '左' }, { value: 'center', label: '中' }, { value: 'right', label: '右' }]"
+              v-for="option in alignmentOptions"
               :key="option.value"
               class="rounded-xl px-3 py-2 text-sm transition"
               :class="editor.align === option.value ? 'bg-white text-stone-950 shadow-sm' : 'text-stone-500'"
