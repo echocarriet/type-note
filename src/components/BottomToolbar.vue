@@ -16,6 +16,10 @@ export default {
       type: String,
       default: '',
     },
+    disabledTools: {
+      type: Array,
+      default: () => [],
+    },
   },
   emits: ['select'],
   data() {
@@ -33,7 +37,7 @@ export default {
         class="flex min-h-14 flex-col items-center justify-center gap-0.5 rounded-xl text-stone-500 transition disabled:opacity-35"
         :class="activePanel === tool.id ? 'bg-white/80 text-stone-950' : ''"
         type="button"
-        :disabled="!tool.enabled"
+        :disabled="!tool.enabled || disabledTools.includes(tool.id)"
         :aria-pressed="activePanel === tool.id"
         @click="$emit('select', tool.id)"
       >

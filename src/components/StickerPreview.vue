@@ -1,5 +1,6 @@
 <script>
 import { Copy, LoaderCircle, Trash2, UndoDot } from '@lucide/vue'
+import { createCurveLayout } from '../utils/curveLayout'
 
 export default {
   name: 'StickerPreview',
@@ -22,6 +23,10 @@ export default {
       type: Object,
       required: true,
     },
+    curve: {
+      type: Object,
+      required: true,
+    },
     isCopying: {
       type: Boolean,
       default: false,
@@ -40,6 +45,79 @@ export default {
     },
   },
   emits: ['delete', 'undo', 'copy'],
+  computed: {
+    curvedLineLayouts() {
+      const canvas = document.createElement('canvas')
+      const context = canvas.getContext('2d')
+      const fontSize = Number.parseFloat(this.previewStyle.fontSize) || 36
+      const letterSpacing = Number.parseFloat(this.previewStyle.letterSpacing) || 0
+
+      if (context) context.font = `${fontSize}px ${this.previewStyle.fontFamily}`
+
+      return this.text.split('\n').map((line) => {
+        const characters = this.getGraphemes(line || ' ')
+        const widths = characters.map((character) =>
+          context?.measureText(character).width || fontSize,
+        )
+
+        return {
+          characters,
+          layout: createCurveLayout(widths, letterSpacing, this.curve.amount),
+        }
+      })
+    },
+
+    curvedTextStyle() {
+      return {
+        color: this.previewStyle.color,
+        fontFamily: this.previewStyle.fontFamily,
+        fontSize: this.previewStyle.fontSize,
+        lineHeight: this.previewStyle.lineHeight,
+        textAlign: this.previewStyle.textAlign,
+      }
+    },
+
+    curveLineAlignment() {
+      return {
+        left: 'flex-start',
+        center: 'center',
+        right: 'flex-end',
+      }[this.previewStyle.textAlign] || 'center'
+    },
+  },
+  methods: {
+    getGraphemes(text) {
+      if (typeof Intl.Segmenter === 'function') {
+        const segmenter = new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        return Array.from(segmenter.segment(text), ({ segment }) => segment)
+      }
+
+      return Array.from(text)
+    },
+
+    curveLineStyle(layout) {
+      return {
+        alignItems: 'baseline',
+        display: 'flex',
+        justifyContent: this.curveLineAlignment,
+        paddingBottom: this.curve.amount < 0 ? `${layout.heightOffset}px` : '0',
+        paddingTop: this.curve.amount > 0 ? `${layout.heightOffset}px` : '0',
+        width: '100%',
+      }
+    },
+
+    curveCharacterStyle(index, line) {
+      const glyph = line.layout.glyphs[index]
+
+      return {
+        display: 'inline-block',
+        marginRight: index < line.characters.length - 1 ? this.previewStyle.letterSpacing : '0',
+        transform: `translate(${glyph.translateX}px, ${glyph.translateY}px) rotate(${glyph.rotation}deg)`,
+        transformOrigin: 'center',
+        whiteSpace: 'pre',
+      }
+    },
+  },
 }
 </script>
 
@@ -78,8 +156,30 @@ export default {
       </button>
     </div>
 
-    <div class="preview-box max-h-full max-w-full overflow-auto" :style="boxStyle">
+    <div
+      class="preview-box max-h-full max-w-full"
+      :class="curve.enabled ? 'overflow-visible' : 'overflow-auto'"
+      :style="boxStyle"
+    >
+      <div
+        v-if="curve.enabled"
+        class="curved-preview flex max-h-full max-w-full flex-col overflow-visible"
+        :style="curvedTextStyle"
+      >
+        <div
+          v-for="(line, lineIndex) in curvedLineLayouts"
+          :key="lineIndex"
+          :style="curveLineStyle(line.layout)"
+        >
+          <span
+            v-for="(character, characterIndex) in line.characters"
+            :key="`${lineIndex}-${characterIndex}`"
+            :style="curveCharacterStyle(characterIndex, line)"
+          >{{ character }}</span>
+        </div>
+      </div>
       <p
+        v-else
         class="preview-text max-h-full max-w-full whitespace-pre-wrap break-words text-4xl"
         :style="previewStyle"
       >{{ text }}</p>

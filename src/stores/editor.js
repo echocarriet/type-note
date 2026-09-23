@@ -20,16 +20,23 @@ const DEFAULT_STYLE = {
   writingMode: 'horizontal',
 }
 
+const DEFAULT_CURVE = {
+  enabled: false,
+  amount: 0,
+}
+
 export const useEditorStore = defineStore('editor', {
   state: () => ({
     text: '',
     ...DEFAULT_STYLE,
+    curve: { ...DEFAULT_CURVE },
     box: { ...DEFAULT_BOX },
   }),
 
   actions: {
     resetStyle() {
       Object.assign(this, DEFAULT_STYLE)
+      this.curve = { ...DEFAULT_CURVE }
       this.box = { ...DEFAULT_BOX }
     },
   },

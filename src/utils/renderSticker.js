@@ -1,3 +1,5 @@
+import { createCurveLayout } from './curveLayout'
+
 const FONT_SIZE = 96
 const SAFE_PADDING = 48
 const OUTPUT_SCALE = 3
@@ -33,6 +35,38 @@ function drawLine(context, line, y, options) {
   graphemes.forEach((grapheme) => {
     context.fillText(grapheme, x, y)
     x += context.measureText(grapheme).width + letterSpacing
+  })
+}
+
+function measureCurvedLine(context, line, letterSpacing, amount) {
+  const graphemes = getGraphemes(line || ' ')
+  const glyphWidths = graphemes.map((grapheme) => context.measureText(grapheme).width)
+
+  return {
+    graphemes,
+    glyphWidths,
+    layout: createCurveLayout(glyphWidths, letterSpacing, amount),
+  }
+}
+
+function drawCurvedLine(context, curvedLine, baselineY, options) {
+  const { contentX, contentWidth, align } = options
+  const { graphemes, layout } = curvedLine
+  let visualStart = contentX
+
+  if (align === 'center') visualStart = contentX + (contentWidth - layout.visualWidth) / 2
+  if (align === 'right') visualStart = contentX + contentWidth - layout.visualWidth
+
+  const offsetX = visualStart - layout.visualLeft
+
+  graphemes.forEach((grapheme, index) => {
+    const glyph = layout.glyphs[index]
+
+    context.save()
+    context.translate(offsetX + glyph.x, baselineY + glyph.translateY)
+    context.rotate((glyph.rotation * Math.PI) / 180)
+    context.fillText(grapheme, 0, 0)
+    context.restore()
   })
 }
 
@@ -127,6 +161,7 @@ export async function renderStickerPng({
   lineHeight = 1.4,
   align = 'center',
   writingMode = 'horizontal',
+  curve = {},
   box = {},
 }) {
   const content = text ?? ''
@@ -141,8 +176,20 @@ export async function renderStickerPng({
   measureContext.textBaseline = 'alphabetic'
 
   const isVertical = writingMode === 'vertical'
+  const curveOptions = {
+    enabled: false,
+    amount: 0,
+    ...curve,
+  }
+  const hasCurve = curveOptions.enabled && !isVertical
   const columnStep = FONT_SIZE * lineHeight
   const widths = lines.map((line) => measureLine(measureContext, line, letterSpacing))
+  const curvedLines = hasCurve
+    ? lines.map((line) => measureCurvedLine(measureContext, line, letterSpacing, curveOptions.amount))
+    : []
+  const curveOffset = hasCurve
+    ? Math.max(...curvedLines.map((line) => line.layout.heightOffset))
+    : 0
   const columnHeights = lines.map((line) => measureVerticalColumn(line, letterSpacing))
   const boxOptions = {
     type: 'none',
@@ -156,21 +203,24 @@ export async function renderStickerPng({
     paddingY: 16,
     ...box,
   }
-  const hasBox = boxOptions.type !== 'none'
-  const hasStroke = ['stroke', 'fill-stroke'].includes(boxOptions.type)
+  const hasBox = boxOptions.type !== 'none' && !hasCurve
+  const hasStroke = hasBox && ['stroke', 'fill-stroke'].includes(boxOptions.type)
   const strokeWidth = hasStroke ? boxOptions.strokeWidth : 0
   const paddingX = hasBox ? boxOptions.paddingX : 0
   const paddingY = hasBox ? boxOptions.paddingY : 0
-  const contentWidth = isVertical ? lines.length * columnStep : Math.max(...widths)
+  const contentWidth = isVertical
+    ? lines.length * columnStep
+    : Math.max(...(hasCurve ? curvedLines.map((line) => line.layout.visualWidth) : widths))
   const contentHeight = isVertical
     ? Math.max(...columnHeights)
-    : lines.length * FONT_SIZE * lineHeight
+    : lines.length * (columnStep + curveOffset)
   const boxWidth = contentWidth + paddingX * 2 + strokeWidth * 2
   const boxHeight = contentHeight + paddingY * 2 + strokeWidth * 2
-  const logicalWidth = Math.ceil(boxWidth + SAFE_PADDING * 2)
-  const logicalHeight = Math.ceil(boxHeight + SAFE_PADDING * 2)
-  const contentX = SAFE_PADDING + strokeWidth + paddingX
-  const contentY = SAFE_PADDING + strokeWidth + paddingY
+  const safePadding = hasCurve ? FONT_SIZE : SAFE_PADDING
+  const logicalWidth = Math.ceil(boxWidth + safePadding * 2)
+  const logicalHeight = Math.ceil(boxHeight + safePadding * 2)
+  const contentX = safePadding + strokeWidth + paddingX
+  const contentY = safePadding + strokeWidth + paddingY
   const canvas = document.createElement('canvas')
   canvas.width = logicalWidth * OUTPUT_SCALE
   canvas.height = logicalHeight * OUTPUT_SCALE
@@ -181,7 +231,7 @@ export async function renderStickerPng({
   context.scale(OUTPUT_SCALE, OUTPUT_SCALE)
   context.clearRect(0, 0, logicalWidth, logicalHeight)
   context.font = `${FONT_SIZE}px ${fontFamily}`
-  context.textAlign = isVertical ? 'center' : 'left'
+  context.textAlign = isVertical || hasCurve ? 'center' : 'left'
   context.textBaseline = 'middle'
 
   if (hasBox) drawBox(context, boxOptions, boxWidth, boxHeight)
@@ -195,6 +245,18 @@ export async function renderStickerPng({
         contentY,
         contentHeight,
         letterSpacing,
+        align,
+      })
+    })
+  } else if (hasCurve) {
+    const curveLineHeight = columnStep + curveOffset
+
+    curvedLines.forEach((line, index) => {
+      const lineTop = contentY + curveLineHeight * index
+      const baselineY = lineTop + (curveOptions.amount > 0 ? curveOffset : 0) + columnStep / 2
+      drawCurvedLine(context, line, baselineY, {
+        contentX,
+        contentWidth,
         align,
       })
     })

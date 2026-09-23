@@ -160,6 +160,7 @@ export default {
         lineHeight: this.editor.lineHeight,
         align: this.editor.align,
         writingMode: this.editor.writingMode,
+        curve: { ...this.editor.curve },
         box: { ...this.editor.box },
       }
     },
@@ -337,6 +338,8 @@ export default {
     },
 
     togglePanel(panel) {
+      if (panel === 'box' && this.editor.curve.enabled) return
+
       this.$refs.noteInput?.blur()
       this.activePanel = this.activePanel === panel ? '' : panel
 
@@ -390,7 +393,11 @@ export default {
     },
 
     createHistorySnapshot() {
-      return { ...this.historyState, box: { ...this.historyState.box } }
+      return {
+        ...this.historyState,
+        curve: { ...this.historyState.curve },
+        box: { ...this.historyState.box },
+      }
     },
 
     resetHistoryBaseline() {
@@ -401,13 +408,21 @@ export default {
     recordHistory(nextState) {
       if (!this.historyReady || this.isRestoringHistory) return
 
-      const snapshot = { ...nextState, box: { ...nextState.box } }
+      const snapshot = {
+        ...nextState,
+        curve: { ...nextState.curve },
+        box: { ...nextState.box },
+      }
       if (JSON.stringify(snapshot) === JSON.stringify(this.lastHistorySnapshot)) return
 
       if (this.lastHistorySnapshot) {
         this.undoStack = [
           ...this.undoStack,
-          { ...this.lastHistorySnapshot, box: { ...this.lastHistorySnapshot.box } },
+          {
+            ...this.lastHistorySnapshot,
+            curve: { ...this.lastHistorySnapshot.curve },
+            box: { ...this.lastHistorySnapshot.box },
+          },
         ].slice(-10)
       }
       this.lastHistorySnapshot = snapshot
@@ -425,11 +440,15 @@ export default {
       this.editor.lineHeight = previousState.lineHeight
       this.editor.align = previousState.align
       this.editor.writingMode = previousState.writingMode
+      if (previousState.curve) this.editor.curve = { ...previousState.curve }
       if (previousState.box) this.editor.box = { ...previousState.box }
       this.lastHistorySnapshot = {
         ...previousState,
+        curve: previousState.curve ? { ...previousState.curve } : { ...this.editor.curve },
         box: previousState.box ? { ...previousState.box } : { ...this.editor.box },
       }
+
+      if (this.editor.curve.enabled && this.activePanel === 'box') this.activePanel = 'layout'
 
       this.$nextTick(() => {
         this.isRestoringHistory = false
@@ -440,6 +459,21 @@ export default {
       if (!this.editor.text) return
       this.editor.text = ''
       this.$refs.noteInput?.resetEmptyState()
+    },
+
+    setWritingMode(mode) {
+      this.editor.writingMode = mode
+      if (mode === 'vertical') this.editor.curve.enabled = false
+    },
+
+    toggleCurve() {
+      if (this.editor.writingMode === 'vertical') return
+
+      this.editor.curve.enabled = !this.editor.curve.enabled
+      if (this.editor.curve.enabled) {
+        if (this.editor.curve.amount === 0) this.editor.curve.amount = 30
+        this.editor.box.type = 'none'
+      }
     },
 
     persistRecentUsage() {
@@ -733,6 +767,7 @@ export default {
         lineHeight: this.editor.lineHeight,
         align: this.editor.align,
         writingMode: this.editor.writingMode,
+        curve: { ...this.editor.curve },
         box: { ...this.editor.box },
       })
     },
@@ -780,6 +815,7 @@ export default {
         :text="editor.text"
         :preview-style="previewStyle"
         :box-style="boxStyle"
+        :curve="editor.curve"
         :is-copying="isRendering"
         :can-undo="undoStack.length > 0"
         :line-count="inputLineCount"
@@ -1031,7 +1067,7 @@ export default {
               class="min-h-10 rounded-xl px-3 py-2 text-sm transition"
               :class="editor.writingMode === option.value ? 'bg-white text-stone-950 shadow-sm' : 'text-stone-500'"
               type="button"
-              @click="editor.writingMode = option.value"
+              @click="setWritingMode(option.value)"
             >{{ option.label }}</button>
           </div>
         </div>
@@ -1057,12 +1093,45 @@ export default {
           <input v-model.number="editor.letterSpacing" class="w-full accent-stone-800" type="range" min="-4" max="20" step="1">
         </label>
 
-        <label class="block">
+        <label class="mb-6 block">
           <span class="mb-2 flex justify-between text-sm text-stone-700">
             <span>行距</span><span>{{ editor.lineHeight.toFixed(1) }}</span>
           </span>
           <input v-model.number="editor.lineHeight" class="w-full accent-stone-800" type="range" min="0.8" max="2.4" step="0.1">
         </label>
+
+        <div>
+          <div class="flex min-h-11 items-center justify-between gap-4">
+            <div>
+              <p class="text-sm text-stone-700">圓弧</p>
+              <p v-if="editor.writingMode === 'vertical'" class="mt-0.5 text-xs text-stone-400">直排文字不支援圓弧</p>
+            </div>
+            <button
+              class="relative h-7 w-12 overflow-hidden rounded-full transition disabled:opacity-35"
+              :class="editor.curve.enabled ? 'bg-stone-800' : 'bg-stone-300'"
+              type="button"
+              role="switch"
+              :aria-checked="editor.curve.enabled"
+              :disabled="editor.writingMode === 'vertical'"
+              aria-label="圓弧文字"
+              @click="toggleCurve"
+            >
+              <span
+                class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow-sm transition-transform"
+                :class="editor.curve.enabled ? 'translate-x-5' : 'translate-x-0'"
+              />
+            </button>
+          </div>
+
+          <label v-if="editor.curve.enabled" class="mt-4 block">
+            <span class="mb-2 flex justify-between text-xs text-stone-500">
+              <span>反向彎曲</span>
+              <span>{{ editor.curve.amount }}</span>
+              <span>正向彎曲</span>
+            </span>
+            <input v-model.number="editor.curve.amount" class="w-full accent-stone-800" type="range" min="-100" max="100" step="1">
+          </label>
+        </div>
       </template>
 
       <template v-if="activePanel === 'box'">
@@ -1248,6 +1317,10 @@ export default {
       <div v-else class="min-h-0 flex-1" />
     </div>
 
-    <BottomToolbar :active-panel="activePanel" @select="togglePanel" />
+    <BottomToolbar
+      :active-panel="activePanel"
+      :disabled-tools="editor.curve.enabled ? ['box'] : []"
+      @select="togglePanel"
+    />
   </main>
 </template>
