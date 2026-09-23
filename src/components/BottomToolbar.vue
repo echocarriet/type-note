@@ -29,8 +29,8 @@ export default {
 </script>
 
 <template>
-  <nav class="z-20 shrink-0 border-t border-stone-200 bg-[#f7f4ee]/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur" aria-label="編輯工具">
-    <div class="grid grid-cols-4">
+  <nav class="z-20 -mx-5 shrink-0 border-t border-stone-200 bg-[#f7f4ee]/95 pb-[max(0.5rem,env(safe-area-inset-bottom))] pt-2 backdrop-blur sm:-mx-6" aria-label="編輯工具">
+    <div class="grid grid-cols-4 px-5 sm:px-6">
       <button
         v-for="tool in tools"
         :key="tool.id"
